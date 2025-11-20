@@ -1,6 +1,34 @@
 #!/usr/bin/env python3
 """
-Wrapper script to create sunburst with custom center label "Species"
+Create Species Sunburst - Wrapper for Custom Sunburst Charts
+
+A specialized wrapper around sunburst_script.py that creates sunburst charts
+with custom center labels and specific hierarchy configurations.
+
+This script demonstrates how to:
+- Load and process taxonomy data (Phylum > Order > Family)
+- Create custom center labels (e.g., "Species" instead of default)
+- Generate sunburst charts with specific styling
+- Export in multiple formats (PNG, SVG, PDF)
+
+Usage:
+    1. Edit the csv_file path and level_cols to match your data
+    2. Run: python create_species_sunburst.py
+
+Customization:
+    - Modify csv_file: Path to your CSV data file
+    - Modify level_cols: Hierarchy columns ['Level1', 'Level2', 'Level3', None, None]
+    - Modify line 208: Center label text (default: 'Species')
+    - Modify output_file: Output filename (line 37)
+    - Modify title: Chart title (line 38)
+
+Output:
+    - animal_species_sunburst.png: High-resolution PNG
+    - animal_species_sunburst.svg: Editable vector format
+    - animal_species_sunburst.pdf: Publication-ready PDF
+
+Note: This is a template script. For general usage, use sunburst_script.py
+      with command-line arguments instead.
 """
 
 import sys

@@ -1,7 +1,43 @@
 #!/usr/bin/env python3
 """
-Script to create a choropleth map showing counts by country.
+Sample Mapper - Advanced Choropleth Map Generator
 
+Creates professional choropleth maps from CSV data showing counts by country.
+
+Usage:
+    python sample_mapper.py <input_csv> <output_dir> --map-data <shapefile_dir> [options]
+
+Examples:
+    # Basic usage - count rows per country
+    python sample_mapper.py data.csv output --map-data ne_110m_admin_0_countries
+
+    # Count unique species per country
+    python sample_mapper.py biodiversity.csv output --map-data map_data \\
+        --count-column "Species" --unique-count --colour green
+
+    # Custom boundaries for Europe
+    python sample_mapper.py europe_data.csv output --map-data map_data \\
+        --bounds -15 35 45 72 --colour purple
+
+Required Arguments:
+    input_csv           Path to input CSV file
+    output_dir          Directory to save output files
+    --map-data, -m      Path to directory containing shapefiles
+
+Optional Arguments:
+    --country-column, -c     Column containing country names (default: "Country")
+    --count-column, -cc      Column to count values from (default: count rows)
+    --unique-count, -u       Count unique values only
+    --colour, -col           Color scheme: blue, red, green, purple, etc.
+    --bounds, -bounds        Custom map boundaries: min_lon min_lat max_lon max_lat
+    --title, -t              Map title
+    --border-extension, -b   Degrees to extend borders (default: 5.0)
+
+Output:
+    - sample_map.png: High-resolution raster (300 DPI)
+    - sample_map.svg: Vector graphics for publications
+
+For detailed documentation, see README.md in this directory.
 """
 
 import pandas as pd
