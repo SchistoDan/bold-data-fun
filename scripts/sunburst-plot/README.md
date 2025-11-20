@@ -4,6 +4,34 @@ A powerful Python script that creates hierarchical sunburst charts from CSV data
 
 ![Sunburst Chart Example](sunburst_chart.png)
 
+## Scripts in This Directory
+
+This directory contains two scripts for creating sunburst charts:
+
+### 1. `sunburst_script.py` - Main Chart Generator (Recommended)
+
+The primary, feature-rich script for general use. Provides full command-line interface with extensive customization options.
+
+**Use this when:**
+- You want command-line control over all chart parameters
+- You need to process different datasets without modifying code
+- You want to integrate sunburst generation into automated workflows
+
+**Quick start:** `python sunburst_script.py data.csv`
+
+### 2. `create_species_sunburst.py` - Custom Template Script
+
+A specialized wrapper demonstrating how to create sunburst charts with custom center labels and hardcoded configurations. This script shows how to programmatically use the sunburst functions for specialized visualizations.
+
+**Use this when:**
+- You need a custom center label (e.g., "Species" instead of "Total Samples")
+- You want a template for creating project-specific visualization scripts
+- You're learning how to use the sunburst functions programmatically
+
+**Quick start:** Edit the script parameters, then run `python create_species_sunburst.py`
+
+**Note:** For most users, `sunburst_script.py` with command-line arguments is the recommended approach. The template script is provided as a customization example.
+
 ## Features
 
 ### 🌟 **Core Capabilities**

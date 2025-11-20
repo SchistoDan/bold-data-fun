@@ -1,7 +1,55 @@
 #!/usr/bin/env python3
 """
 Enhanced Sunburst Chart Generator
-Creates a hierarchical sunburst plot with optional small slice aggregation and customizable line thickness
+
+Creates hierarchical sunburst plots from CSV data with support for 3-5 levels
+of hierarchy, intelligent color inheritance, smart labeling, and publication-quality output.
+
+Usage:
+    python sunburst_script.py <csv_file> [options]
+
+Basic Examples:
+    # Simple 3-level chart with default settings
+    python sunburst_script.py data.csv
+
+    # Clean professional chart with thin borders
+    python sunburst_script.py data.csv --line-width 0.3 --threshold 8.0
+
+    # Count unique species instead of all records
+    python sunburst_script.py data.csv --sample-id "Species" --count-unique
+
+    # Custom hierarchy levels
+    python sunburst_script.py data.csv --level1 "Kingdom" --level2 "Phylum" --level3 "Class"
+
+    # Four or five level hierarchies
+    python sunburst_script.py data.csv --level4 "Order" --level5 "Family"
+
+Advanced Examples:
+    # Color inheritance with variations (progressive shading)
+    python sunburst_script.py data.csv --color-inherit-level 1 --color-mode variations
+
+    # Custom output formats
+    python sunburst_script.py data.csv --output chart.svg --width 20 --height 20
+
+    # Aggregate small slices and control labeling
+    python sunburst_script.py data.csv --threshold 10.0 --label-threshold 6.0
+
+Key Features:
+    - Multi-level hierarchy support (3-5 levels)
+    - Smart color inheritance with two modes (variations/same)
+    - Small slice aggregation to reduce visual clutter
+    - Customizable line widths and label thresholds
+    - Multiple output formats (PNG, SVG, PDF, EPS, TIFF)
+    - Dual counting modes (all records or unique values)
+
+Output:
+    By default generates three files:
+    - sunburst_chart.png (or specified format)
+    - sunburst_chart.svg (vector, editable)
+    - sunburst_chart.pdf (publication-ready)
+
+For detailed documentation, see README.md in this directory or run:
+    python sunburst_script.py --help
 """
 
 import pandas as pd
