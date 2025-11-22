@@ -75,7 +75,9 @@ AAHYM
 
 **Details:**
 - Project codes match the prefix of BOLD `processid` values
-- Example: processid "AALAR174-18" matches project "AALAR"
+- **Important:** Matching requires the project code to be followed immediately by a digit
+- Example: Project code "RBGB" matches "RBGB410-17" but NOT "RBGBB410-17"
+- This ensures precise project matching without false positives from similar project codes
 
 ## Filtering Logic
 
@@ -120,23 +122,29 @@ For each record:
 **Interpretation:** Priority specimens that should be identified by an expert to increase the number of specimens in the BIN
 
 ### 4. UK Representatives (`UK_rep`)
-**Definition:** UK records that are the only UK records in their BIN
+**Definition:** UK records from target projects that are the only UK records in their BIN (across the entire BOLD database)
 
 **Logic:**
 ```
-For each BIN:
-    1. Count records with country_iso = 'GB' (UK records)
-    2. Count records with country_iso != 'GB' (non-UK records)
-    3. If BIN has both UK AND non-UK records → all UK records are flagged
+For each BIN across ALL BOLD data:
+    1. Identify UK records (country_iso = 'GB') from target projects
+    2. Identify UK records from OTHER projects/sources
+    3. If BIN has UK records ONLY from target projects → flag those records
+    4. If BIN has UK records from other sources → do NOT flag
 ```
 
-**Interpretation:** Priority specimens for expert ID as they represent the only UK occurrence of their BIN.
+**Interpretation:** Priority specimens representing unique UK genetic lineages within their BIN. These are the only UK specimens known for this BIN, making them important for:
+- UK biogeographic representation
+- Potential endemic or locally adapted populations
+- Verification of species identification and distribution
+
+**Note:** This criterion requires analysis of the full BOLD database, not just target project records, to accurately identify unique UK representatives.
 
 ## Output Files
 
 ### 1. Detailed Output (`project_search_output.tsv`)
 **Format:** TSV file  
-**Content:** All records matching at least one criterion
+**Content:** ALL records from target projects, with flags indicating which criteria they meet
 
 **Structure:**
 - All original BOLD data columns
@@ -147,12 +155,14 @@ For each BIN:
   - `UK_rep`: True/False
 
 **Notes:**
-- Each record appears only once, even if it matches multiple criteria
+- Contains ALL records from target projects, not just those meeting criteria
+- Records not meeting any criteria will have False for all four flag columns
 - Multiple criteria are indicated by multiple True values in flag columns
+- This provides complete dataset coverage for analysis and filtering
 
 ### 2. Summary Output (`project_search_summary.tsv`)
 **Format:** TSV file  
-**Content:** Family-level aggregation of results
+**Content:** Family-level aggregation of flagged results
 
 **Columns (in order):**
 1. `Phylum`: Taxonomic phylum
@@ -165,6 +175,10 @@ For each BIN:
 8. `UK_rep`: Count of UK representative records in this family
 
 **Sorting:** Results sorted by taxonomic hierarchy (Phylum → Class → Order → Family)
+
+**Notes:**
+- Only includes families with at least one flagged record (at least one criterion count > 0)
+- Provides a high-level taxonomic overview of priority specimens
 
 ### 3. Log File (`project_search_log.txt`)
 **Format:** Plain text  
@@ -200,11 +214,17 @@ All output files are created in the same directory as the script:
 
 ## Performance Considerations
 
+### Memory Usage
+- Full BOLD dataset is loaded into memory for UK representative analysis
+- For datasets with ~3 million rows and 110 columns, expect 1-3 GB RAM usage
+- After UK rep identification, dataset is filtered to target projects for other analyses
+
 ### Optimization Strategies
 1. **Dictionary-based lookups:** O(1) species name matching using hash tables
 2. **Set operations:** Efficient filtering using Python sets
 3. **Pandas operations:** Vectorized operations where possible
 4. **Encoding handling:** Automatic detection and handling of mixed encodings
+5. **Two-pass processing:** UK representatives analyzed on full dataset, other criteria on filtered subset
 
 
 ## Example Workflow

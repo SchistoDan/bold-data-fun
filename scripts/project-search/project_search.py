@@ -175,17 +175,40 @@ def load_projects(projects_file, logger):
     return projects
 
 
+def matches_project(processid, projects):
+    """
+    Check if a processid matches any of the specified project codes.
+    Project code must be followed immediately by a digit.
+    
+    Args:
+        processid: Process ID to check
+        projects (set): Set of project codes
+        
+    Returns:
+        bool: True if processid matches a project code
+    """
+    if pd.isna(processid):
+        return False
+    processid_str = str(processid)
+    for proj in projects:
+        if processid_str.startswith(proj):
+            # Check that the character after the project code is a digit
+            if len(processid_str) > len(proj) and processid_str[len(proj)].isdigit():
+                return True
+    return False
+
+
 def load_bold_data(bold_file, projects, logger):
     """
-    Load BOLD data and filter to specified projects.
+    Load BOLD data (unfiltered).
     
     Args:
         bold_file (str): Path to BOLD TSV file
-        projects (set): Set of project codes to filter
+        projects (set): Set of project codes (for logging only)
         logger (logging.Logger): Logger instance
         
     Returns:
-        pd.DataFrame: Filtered BOLD data for specified projects
+        pd.DataFrame: Full BOLD data
     """
     logger.info(f"Loading BOLD data from: {bold_file}")
     
@@ -210,20 +233,6 @@ def load_bold_data(bold_file, projects, logger):
     
     initial_count = len(bold_df)
     logger.info(f"Loaded {initial_count:,} total BOLD records")
-    
-    # Filter to specified projects
-    # processid starts with project code
-    def matches_project(processid):
-        if pd.isna(processid):
-            return False
-        processid_str = str(processid)
-        return any(processid_str.startswith(proj) for proj in projects)
-    
-    bold_df = bold_df[bold_df['processid'].apply(matches_project)].copy()
-    
-    filtered_count = len(bold_df)
-    logger.info(f"Filtered to {filtered_count:,} records from specified projects")
-    logger.info(f"Removed {initial_count - filtered_count:,} records from other projects")
     
     return bold_df
 
@@ -344,12 +353,14 @@ def identify_bags_records(bold_df, bags_dict, species_dict, grade, logger):
     return bags_records
 
 
-def identify_uk_representatives(bold_df, logger):
+def identify_uk_representatives(bold_df_full, projects, logger):
     """
-    Identify UK records that are the only UK records in their BIN.
+    Identify UK records from target projects that are the only UK records in their BIN.
+    Checks across the full BOLD dataset to see if other UK records exist outside the projects.
     
     Args:
-        bold_df (pd.DataFrame): BOLD data
+        bold_df_full (pd.DataFrame): Full BOLD data (unfiltered)
+        projects (set): Set of project codes
         logger (logging.Logger): Logger instance
         
     Returns:
@@ -357,10 +368,16 @@ def identify_uk_representatives(bold_df, logger):
     """
     logger.info("Identifying UK-only representatives in BINs...")
     
-    # Group by BIN and count UK vs non-UK records
-    bin_country_counts = defaultdict(lambda: {'GB': [], 'non_GB': []})
+    # Identify which processids are in our target projects
+    project_processids = set()
+    for idx, row in bold_df_full.iterrows():
+        if matches_project(row['processid'], projects):
+            project_processids.add(row['processid'])
     
-    for idx, row in bold_df.iterrows():
+    # Group by BIN and separate UK records: in projects vs outside projects
+    bin_uk_records = defaultdict(lambda: {'in_projects': [], 'outside_projects': []})
+    
+    for idx, row in bold_df_full.iterrows():
         bin_uri = row.get('bin_uri', '')
         if pd.isna(bin_uri) or not bin_uri:
             continue
@@ -368,19 +385,20 @@ def identify_uk_representatives(bold_df, logger):
         country_iso = row.get('country_iso', '')
         processid = row['processid']
         
+        # Only interested in UK records
         if country_iso == 'GB':
-            bin_country_counts[bin_uri]['GB'].append(processid)
-        else:
-            bin_country_counts[bin_uri]['non_GB'].append(processid)
+            if processid in project_processids:
+                bin_uk_records[bin_uri]['in_projects'].append(processid)
+            else:
+                bin_uk_records[bin_uri]['outside_projects'].append(processid)
     
-    # Find UK records that are the ONLY UK records in their BIN (and BIN has other non-UK records)
+    # Flag UK records from projects that are the ONLY UK records in their BIN
     uk_reps = set()
     
-    for bin_uri, counts in bin_country_counts.items():
-        # UK record(s) exist AND there are non-UK records
-        if counts['GB'] and counts['non_GB']:
-            # All UK records in this BIN are UK representatives
-            uk_reps.update(counts['GB'])
+    for bin_uri, records in bin_uk_records.items():
+        # UK records exist in our projects AND no UK records exist outside our projects
+        if records['in_projects'] and not records['outside_projects']:
+            uk_reps.update(records['in_projects'])
     
     logger.info(f"Found {len(uk_reps)} UK representative records")
     
@@ -404,19 +422,20 @@ def create_output_dataframe(bold_df, gaps, bags_e, bags_d, uk_reps, logger):
     """
     logger.info("Creating output dataframe...")
     
-    # Combine all flagged records
-    all_flagged = gaps | bags_e | bags_d | uk_reps
+    # Use ALL records from bold_df (which is already filtered to target projects)
+    output_df = bold_df.copy()
     
-    # Filter to only flagged records
-    output_df = bold_df[bold_df['processid'].isin(all_flagged)].copy()
-    
-    # Add flag columns
+    # Add flag columns (will be False for records not in the sets)
     output_df['gaps'] = output_df['processid'].isin(gaps)
     output_df['BAGS_E'] = output_df['processid'].isin(bags_e)
     output_df['BAGS_D'] = output_df['processid'].isin(bags_d)
     output_df['UK_rep'] = output_df['processid'].isin(uk_reps)
     
-    logger.info(f"Output contains {len(output_df)} flagged records")
+    # Count flagged records
+    flagged_count = (output_df[['gaps', 'BAGS_E', 'BAGS_D', 'UK_rep']].any(axis=1)).sum()
+    
+    logger.info(f"Output contains {len(output_df)} total records from target projects")
+    logger.info(f"  Records meeting at least one criterion: {flagged_count}")
     logger.info(f"  gaps: {output_df['gaps'].sum()}")
     logger.info(f"  BAGS_E: {output_df['BAGS_E'].sum()}")
     logger.info(f"  BAGS_D: {output_df['BAGS_D'].sum()}")
@@ -499,15 +518,27 @@ Examples:
         species_dict = load_species_list(args.species, logger)
         bags_dict = load_bags_data(args.bags, logger)
         projects = load_projects(args.projects, logger)
-        bold_df = load_bold_data(args.bold, projects, logger)
+        bold_df_full = load_bold_data(args.bold, projects, logger)
         logger.info("")
         
         # Run filtering criteria
         logger.info("Applying filtering criteria...")
+        
+        # UK representatives needs full dataset to check for other UK records
+        uk_reps = identify_uk_representatives(bold_df_full, projects, logger)
+        
+        # Filter to project records for other criteria
+        logger.info("Filtering to target projects...")
+        bold_df = bold_df_full[bold_df_full['processid'].apply(lambda pid: matches_project(pid, projects))].copy()
+        filtered_count = len(bold_df)
+        total_count = len(bold_df_full)
+        logger.info(f"Filtered to {filtered_count:,} records from specified projects")
+        logger.info(f"Removed {total_count - filtered_count:,} records from other projects")
+        logger.info("")
+        
         gaps = identify_gaps(bold_df, species_dict, logger)
         bags_e = identify_bags_records(bold_df, bags_dict, species_dict, 'E', logger)
         bags_d = identify_bags_records(bold_df, bags_dict, species_dict, 'D', logger)
-        uk_reps = identify_uk_representatives(bold_df, logger)
         logger.info("")
         
         # Create outputs
