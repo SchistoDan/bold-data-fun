@@ -279,13 +279,42 @@ def get_species_name_from_record(row, species_dict):
     return ''
 
 
-def identify_gaps(bold_df, species_dict, logger):
+def get_bins_with_known_species(bold_df_full, species_dict, logger):
+    """
+    Identify which BINs contain at least one known species.
+    
+    Args:
+        bold_df_full (pd.DataFrame): Full BOLD data
+        species_dict (dict): Dictionary of valid species names
+        logger (logging.Logger): Logger instance
+        
+    Returns:
+        set: Set of BIN URIs that contain known species
+    """
+    logger.info("Pre-calculating BINs with known species...")
+    
+    bins_with_known_species = set()
+    
+    for idx, row in bold_df_full.iterrows():
+        bin_uri = row.get('bin_uri', '')
+        if pd.isna(bin_uri) or not bin_uri:
+            continue
+        
+        matched_species = get_species_name_from_record(row, species_dict)
+        if matched_species:
+            bins_with_known_species.add(bin_uri)
+    
+    logger.info(f"Found {len(bins_with_known_species)} BINs with known species")
+    return bins_with_known_species
+
+
+def identify_gaps(bold_df, bins_with_known_species, logger):
     """
     Identify records in BINs that contain no species from the species list.
     
     Args:
-        bold_df (pd.DataFrame): BOLD data
-        species_dict (dict): Dictionary of valid species names
+        bold_df (pd.DataFrame): BOLD data (filtered to projects)
+        bins_with_known_species (set): Set of BIN URIs with known species
         logger (logging.Logger): Logger instance
         
     Returns:
@@ -293,20 +322,6 @@ def identify_gaps(bold_df, species_dict, logger):
     """
     logger.info("Identifying BIN gaps...")
     
-    # For each BIN, check if it contains ANY species from our list
-    bin_has_known_species = defaultdict(bool)
-    
-    for idx, row in bold_df.iterrows():
-        bin_uri = row.get('bin_uri', '')
-        if pd.isna(bin_uri) or not bin_uri:
-            continue
-        
-        # Check if this record's species is in our list
-        matched_species = get_species_name_from_record(row, species_dict)
-        if matched_species:
-            bin_has_known_species[bin_uri] = True
-    
-    # Now identify all records in BINs that have NO known species
     gaps = set()
     
     for idx, row in bold_df.iterrows():
@@ -314,11 +329,20 @@ def identify_gaps(bold_df, species_dict, logger):
         if pd.isna(bin_uri) or not bin_uri:
             continue
         
-        # If BIN has no known species, this record is a gap
-        if not bin_has_known_species[bin_uri]:
+        # If BIN is not in the set of BINs with known species, it's a gap
+        if bin_uri not in bins_with_known_species:
             gaps.add(row['processid'])
     
-    logger.info(f"Found {len(gaps)} gap records in {len([b for b, v in bin_has_known_species.items() if not v])} BINs")
+    # Count unique BINs that are gaps
+    gap_bins = set()
+    for idx, row in bold_df.iterrows():
+        bin_uri = row.get('bin_uri', '')
+        if pd.isna(bin_uri) or not bin_uri:
+            continue
+        if bin_uri not in bins_with_known_species:
+            gap_bins.add(bin_uri)
+    
+    logger.info(f"Found {len(gaps)} gap records in {len(gap_bins)} BINs")
     
     return gaps
 
@@ -524,6 +548,9 @@ Examples:
         # Run filtering criteria
         logger.info("Applying filtering criteria...")
         
+        # Pre-calculate which BINs contain known species (needs full dataset)
+        bins_with_known_species = get_bins_with_known_species(bold_df_full, species_dict, logger)
+        
         # UK representatives needs full dataset to check for other UK records
         uk_reps = identify_uk_representatives(bold_df_full, projects, logger)
         
@@ -536,7 +563,7 @@ Examples:
         logger.info(f"Removed {total_count - filtered_count:,} records from other projects")
         logger.info("")
         
-        gaps = identify_gaps(bold_df, species_dict, logger)
+        gaps = identify_gaps(bold_df, bins_with_known_species, logger)
         bags_e = identify_bags_records(bold_df, bags_dict, species_dict, 'E', logger)
         bags_d = identify_bags_records(bold_df, bags_dict, species_dict, 'D', logger)
         logger.info("")
