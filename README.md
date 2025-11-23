@@ -18,3 +18,6 @@ Creates horizontal stacked bar charts showing pass/fail percentages for various 
 
 #### [Sunburst Plot](scripts/sunburst-plot)
 Creates hierarchical sunburst charts from CSV data with support for 3-5 levels of hierarchy. Features intelligent color inheritance, smart labeling, slice aggregation for small categories, and multiple output formats (PNG, SVG, PDF).
+
+#### [Project Search](scripts/project-search)
+Identifies BOLD records from specified projects that meet filtering criteria related to species gaps, BAGS grades, and UK representation in BINs. Processes species lists with synonyms and generates detailed results with family-level summaries.
