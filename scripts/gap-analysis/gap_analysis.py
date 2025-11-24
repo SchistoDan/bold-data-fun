@@ -187,9 +187,9 @@ def load_assessed_bags(bags_file: Path) -> Dict[str, Dict]:
     sys.exit(1)
 
 
-def load_result_output(result_file: Path) -> Tuple[Dict, Dict]:
+def load_result_output(result_file: Path) -> Tuple[Dict, Dict, Dict, Dict, Dict, Dict, Set, Dict]:
     """
-    Load result_output.tsv and extract species information.
+    Load result_output.tsv and extract species information with enhanced data structures.
     
     Includes subspecies in the full species name (e.g., "Genus species subspecies")
     
@@ -199,11 +199,23 @@ def load_result_output(result_file: Path) -> Tuple[Dict, Dict]:
         Tuple of:
         - species_taxonid_map: dict mapping species (lowercase) -> list of (taxonid, taxonomy_dict)
         - taxonid_record_count: dict mapping taxonid -> count of records
+        - species_record_count: dict mapping species (lowercase) -> total count of records
+        - bin_record_count: dict mapping BIN_uri -> total count of records
+        - species_to_bins: dict mapping species (lowercase) -> set of BIN_uris
+        - bin_to_species: dict mapping BIN_uri -> set of species (lowercase)
+        - all_species_in_results: set of all species names (lowercase) found in results
+        - genus_to_taxonomy: dict mapping genus -> list of taxonomy dicts
     """
     logging.info(f"Loading result output from {result_file}")
     
     species_taxonid_map = defaultdict(list)
     taxonid_record_count = defaultdict(int)
+    species_record_count = defaultdict(int)
+    bin_record_count = defaultdict(int)
+    species_to_bins = defaultdict(set)
+    bin_to_species = defaultdict(set)
+    all_species_in_results = set()
+    genus_to_taxonomy = defaultdict(list)
     subspecies_count = 0
     
     # Try UTF-8 first, fall back to Latin-1 if decoding fails
@@ -216,6 +228,7 @@ def load_result_output(result_file: Path) -> Tuple[Dict, Dict]:
                     species_full = row.get('species', '').strip()
                     subspecies = row.get('subspecies', '').strip()
                     taxonid = row.get('taxonid', '').strip()
+                    bin_field = row.get('BIN', '').strip()
                     
                     if not species_full or not taxonid:
                         continue
@@ -238,13 +251,30 @@ def load_result_output(result_file: Path) -> Tuple[Dict, Dict]:
                     else:
                         species = species_full
                     
+                    species_lower = species.lower()
+                    
                     # Count records per taxonid
                     taxonid_record_count[taxonid] += 1
                     
-                    # Extract taxonomy (only add once per species-taxonid combo)
-                    species_lower = species.lower()
+                    # Count records per species
+                    species_record_count[species_lower] += 1
                     
-                    # Check if we already have this species-taxonid combination
+                    # Track all species names in results
+                    all_species_in_results.add(species_lower)
+                    
+                    # Parse BIN URIs (may be pipe-separated)
+                    bin_uris = []
+                    if bin_field:
+                        # Split on pipe and clean up each BIN
+                        bin_uris = [b.strip() for b in bin_field.split('|') if b.strip()]
+                    
+                    # Count records per BIN and build species-BIN mappings
+                    for bin_uri in bin_uris:
+                        bin_record_count[bin_uri] += 1
+                        species_to_bins[species_lower].add(bin_uri)
+                        bin_to_species[bin_uri].add(species_lower)
+                    
+                    # Extract taxonomy (only add once per species-taxonid combo)
                     existing_taxonids = [t for t, _ in species_taxonid_map[species_lower]]
                     if taxonid not in existing_taxonids:
                         taxonomy = {
@@ -256,6 +286,30 @@ def load_result_output(result_file: Path) -> Tuple[Dict, Dict]:
                             'genus': row.get('genus', '').strip()
                         }
                         species_taxonid_map[species_lower].append((taxonid, taxonomy))
+                        
+                        # Build genus-to-taxonomy mapping for inference
+                        genus = species_lower.split()[0] if ' ' in species_lower else species_lower
+                        
+                        # Check if this taxonomy already exists for this genus
+                        tax_dict = {
+                            'species': species_lower,
+                            'kingdom': taxonomy.get('kingdom', ''),
+                            'phylum': taxonomy.get('phylum', ''),
+                            'class': taxonomy.get('class', ''),
+                            'order': taxonomy.get('order', ''),
+                            'family': taxonomy.get('family', '')
+                        }
+                        
+                        # Only add if not already present (same taxonomy)
+                        if not any(
+                            existing['kingdom'] == tax_dict['kingdom'] and
+                            existing['phylum'] == tax_dict['phylum'] and
+                            existing['class'] == tax_dict['class'] and
+                            existing['order'] == tax_dict['order'] and
+                            existing['family'] == tax_dict['family']
+                            for existing in genus_to_taxonomy[genus]
+                        ):
+                            genus_to_taxonomy[genus].append(tax_dict)
             
             # If we successfully read the file, log success and return
             if encoding == 'latin-1':
@@ -264,8 +318,20 @@ def load_result_output(result_file: Path) -> Tuple[Dict, Dict]:
             logging.info(f"Found {subspecies_count} subspecies records")
             logging.info(f"Processed {sum(taxonid_record_count.values())} total records")
             logging.info(f"Found {len(taxonid_record_count)} unique taxonids")
+            logging.info(f"Built genus-to-taxonomy mapping for {len(genus_to_taxonomy)} genera")
+            logging.info(f"Tracked {len(all_species_in_results)} unique species names")
+            logging.info(f"Found {len(bin_record_count)} unique BINs")
             
-            return dict(species_taxonid_map), dict(taxonid_record_count)
+            return (
+                dict(species_taxonid_map),
+                dict(taxonid_record_count),
+                dict(species_record_count),
+                dict(bin_record_count),
+                dict(species_to_bins),
+                dict(bin_to_species),
+                all_species_in_results,
+                dict(genus_to_taxonomy)
+            )
             
         except UnicodeDecodeError as e:
             if encoding == 'utf-8':
@@ -294,7 +360,13 @@ def perform_gap_analysis(
     synonym_to_valid: Dict[str, str],
     species_taxonid_map: Dict,
     taxonid_record_count: Dict,
-    bags_data: Dict
+    bags_data: Dict,
+    species_record_count: Dict,
+    bin_record_count: Dict,
+    species_to_bins: Dict,
+    bin_to_species: Dict,
+    all_species_in_results: Set,
+    genus_to_taxonomy: Dict
 ) -> List[Dict]:
     """
     Perform gap analysis by merging all data sources.
@@ -542,7 +614,9 @@ Examples:
     # Load all data
     species_synonyms, valid_species_set, synonym_to_valid = parse_species_list(species_list_path)
     bags_data = load_assessed_bags(args.assessed_bags)
-    species_taxonid_map, taxonid_record_count = load_result_output(args.result_output)
+    (species_taxonid_map, taxonid_record_count, species_record_count,
+     bin_record_count, species_to_bins, bin_to_species,
+     all_species_in_results, genus_to_taxonomy) = load_result_output(args.result_output)
     
     # Perform gap analysis
     results = perform_gap_analysis(
@@ -551,7 +625,13 @@ Examples:
         synonym_to_valid,
         species_taxonid_map,
         taxonid_record_count,
-        bags_data
+        bags_data,
+        species_record_count,
+        bin_record_count,
+        species_to_bins,
+        bin_to_species,
+        all_species_in_results,
+        genus_to_taxonomy
     )
     
     # Write output
