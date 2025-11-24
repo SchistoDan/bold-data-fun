@@ -78,6 +78,549 @@ def format_species_name(species_lower: str) -> str:
     return species_lower
 
 
+def is_linnean_name(name: str) -> bool:
+    """
+    Determine if a species name is a proper Linnean binomial.
+    
+    Returns True if:
+    - Format is "Genus species" or "Genus species subspecies"
+    - No: sp., cf., aff., numbers, DNAS codes, BOLD codes
+    - No: extra punctuation beyond standard binomial
+    - Genus capitalized, species epithet lowercase
+    
+    Returns False for:
+    - "Gammarus sp."
+    - "Gammarus cf. fossarum"
+    - "Enallagma sp. DNAS-283-223485"
+    - "Gammarus sp. 2118c"
+    - Genus-only names
+    
+    Args:
+        name: Species name to check
+        
+    Returns:
+        bool: True if proper Linnean binomial, False otherwise
+    """
+    if not name or not name.strip():
+        return False
+    
+    name = name.strip()
+    
+    # Check for non-Linnean indicators
+    non_linnean_patterns = [
+        'sp.', 'sp ', ' sp', 
+        'cf.', 'cf ', ' cf',
+        'aff.', 'aff ', ' aff',
+        'DNAS', 'BOLD:',
+    ]
+    
+    for pattern in non_linnean_patterns:
+        if pattern in name:
+            return False
+    
+    # Check for numbers (but allow Roman numerals in author names)
+    # We'll be conservative: any digit is non-Linnean
+    if any(char.isdigit() for char in name):
+        return False
+    
+    # Split into parts
+    parts = name.split()
+    
+    # Must have at least 2 parts (Genus species) or 3 (Genus species subspecies)
+    if len(parts) < 2:
+        return False
+    
+    # Too many parts suggests non-Linnean (codes, identifiers, etc.)
+    if len(parts) > 3:
+        return False
+    
+    # First part (genus) should be capitalized
+    genus = parts[0]
+    if not genus[0].isupper():
+        return False
+    
+    # Species epithet should be lowercase (and subspecies if present)
+    for epithet in parts[1:]:
+        if not epithet[0].islower():
+            return False
+    
+    return True
+
+
+def infer_taxonomy_from_genus(species_name: str, genus_to_taxonomy: Dict[str, List[Dict]]) -> Dict:
+    """
+    Infer higher taxonomy for a species by finding congeneric species in BOLD data.
+    
+    Args:
+        species_name: Species binomial (e.g., "trocheta pseudodina" - lowercase)
+        genus_to_taxonomy: Pre-built dict mapping genus -> list of taxonomy dicts
+    
+    Returns:
+        Dict with:
+        - taxonomy: Dict[str, str] - kingdom, phylum, class, order, family, genus
+        - source: str - "Inferred from genus" | "Inconsistent genus taxonomy" | "No genus data"
+        - genus_species_found: List[str] - Which species were used for inference (max 5)
+    """
+    # Extract genus (first word)
+    genus = species_name.split()[0] if ' ' in species_name else species_name
+    
+    # Look up genus in pre-built mapping
+    if genus not in genus_to_taxonomy or not genus_to_taxonomy[genus]:
+        return {
+            'taxonomy': {
+                'kingdom': '',
+                'phylum': '',
+                'class': '',
+                'order': '',
+                'family': '',
+                'genus': genus
+            },
+            'source': 'No genus data',
+            'genus_species_found': []
+        }
+    
+    taxonomy_list = genus_to_taxonomy[genus]
+    
+    # Check for consensus - all taxonomies should be identical
+    first_tax = taxonomy_list[0]
+    
+    all_same = all(
+        tax['kingdom'] == first_tax['kingdom'] and
+        tax['phylum'] == first_tax['phylum'] and
+        tax['class'] == first_tax['class'] and
+        tax['order'] == first_tax['order'] and
+        tax['family'] == first_tax['family']
+        for tax in taxonomy_list
+    )
+    
+    species_found = [tax['species'] for tax in taxonomy_list]
+    
+    if all_same:
+        return {
+            'taxonomy': {
+                'kingdom': first_tax['kingdom'],
+                'phylum': first_tax['phylum'],
+                'class': first_tax['class'],
+                'order': first_tax['order'],
+                'family': first_tax['family'],
+                'genus': genus
+            },
+            'source': 'Inferred from genus',
+            'genus_species_found': species_found[:5]  # Limit to first 5 for brevity
+        }
+    else:
+        # Inconsistent - use first found but flag it
+        return {
+            'taxonomy': {
+                'kingdom': first_tax['kingdom'],
+                'phylum': first_tax['phylum'],
+                'class': first_tax['class'],
+                'order': first_tax['order'],
+                'family': first_tax['family'],
+                'genus': genus
+            },
+            'source': 'Inconsistent genus taxonomy',
+            'genus_species_found': species_found[:5]
+        }
+
+
+def analyze_synonym_bin_distribution(
+    valid_species: str,
+    synonyms: List[str],
+    species_to_bins: Dict[str, Set[str]]
+) -> Dict:
+    """
+    Analyze BIN distribution for valid species vs synonyms.
+    
+    Checks if synonyms are in the same BINs as the valid species, or in different BINs
+    (which would be a taxonomic red flag).
+    
+    Args:
+        valid_species: Valid species name (lowercase)
+        synonyms: List of synonym names (original case)
+        species_to_bins: Dict mapping species (lowercase) -> set of BIN_uris
+    
+    Returns:
+        Dict with:
+        - status: str - "Same BIN" | "Different BINs" | "Partial overlap" | 
+                       "No synonym data" | "No valid data" | "N/A"
+        - details: str - Formatted BIN details (e.g., "Syn1:BIN1|BIN2; Syn2:BIN3")
+    """
+    # Check if species has no synonyms
+    if not synonyms or len(synonyms) == 0:
+        return {
+            'status': 'N/A',
+            'details': ''
+        }
+    
+    # Get BINs for valid species
+    valid_bins = species_to_bins.get(valid_species.lower(), set())
+    
+    if not valid_bins:
+        return {
+            'status': 'No valid data',
+            'details': ''
+        }
+    
+    # Analyze each synonym
+    synonym_bin_info = []
+    all_synonym_bins = set()
+    synonyms_with_data = 0
+    synonyms_in_same_bins = 0
+    synonyms_in_different_bins = 0
+    synonyms_with_overlap = 0
+    
+    for synonym in synonyms:
+        synonym_lower = synonym.lower()
+        synonym_bins = species_to_bins.get(synonym_lower, set())
+        
+        if not synonym_bins:
+            # Synonym not found in data
+            continue
+        
+        synonyms_with_data += 1
+        all_synonym_bins.update(synonym_bins)
+        
+        # Check overlap with valid species BINs
+        shared_bins = valid_bins.intersection(synonym_bins)
+        unique_bins = synonym_bins.difference(valid_bins)
+        
+        if shared_bins and not unique_bins:
+            # All synonym BINs are shared with valid species
+            synonyms_in_same_bins += 1
+        elif unique_bins and not shared_bins:
+            # Synonym in completely different BINs
+            synonyms_in_different_bins += 1
+        else:
+            # Partial overlap
+            synonyms_with_overlap += 1
+        
+        # Format BIN details for this synonym
+        bin_list = sorted(list(synonym_bins))
+        synonym_bin_info.append(f"{synonym}:{' | '.join(bin_list)}")
+    
+    # If no synonyms found in data
+    if synonyms_with_data == 0:
+        return {
+            'status': 'No synonym data',
+            'details': ''
+        }
+    
+    # Determine overall status
+    details = '; '.join(synonym_bin_info)
+    
+    if synonyms_in_different_bins > 0 or synonyms_with_overlap > 0:
+        # ANY synonym in different or partially overlapping BINs = concern
+        if synonyms_in_different_bins > 0 and synonyms_with_overlap == 0:
+            status = 'Different BINs'
+        elif synonyms_with_overlap > 0 and synonyms_in_different_bins == 0:
+            status = 'Partial overlap'
+        else:
+            status = 'Different BINs'  # If both types exist, use most severe
+    else:
+        # All synonyms in same BINs as valid species
+        status = 'Same BIN'
+    
+    return {
+        'status': status,
+        'details': details
+    }
+
+
+def check_name_representation(
+    valid_species: str,
+    synonyms: List[str],
+    all_species_in_results: Set[str]
+) -> Dict:
+    """
+    Check whether valid name and/or synonyms appear in dataset.
+    
+    Identifies cases where a species is only represented by its synonym names
+    (valid name absent), which is a curation concern.
+    
+    Args:
+        valid_species: Valid species name (lowercase)
+        synonyms: List of synonym names (original case)
+        all_species_in_results: Set of all species names (lowercase) found in results
+    
+    Returns:
+        Dict with:
+        - representation: str - "Valid name only" | "Valid + synonym(s)" | 
+                               "Synonym only" | "No records" | "N/A - no synonyms"
+        - names_with_records: str - Comma-separated list of names found
+        - synonym_only_flag: str - "⚠️" if synonym-only, else ""
+    """
+    # Check if species has no synonyms
+    if not synonyms or len(synonyms) == 0:
+        # No synonyms to check
+        if valid_species in all_species_in_results:
+            return {
+                'representation': 'N/A - no synonyms',
+                'names_with_records': format_species_name(valid_species),
+                'synonym_only_flag': ''
+            }
+        else:
+            return {
+                'representation': 'N/A - no synonyms',
+                'names_with_records': '',
+                'synonym_only_flag': ''
+            }
+    
+    # Check which names are found
+    valid_found = valid_species in all_species_in_results
+    
+    synonyms_found = []
+    for syn in synonyms:
+        if syn.lower() in all_species_in_results:
+            synonyms_found.append(syn)
+    
+    # Determine representation status
+    if valid_found and synonyms_found:
+        # Both valid and synonym(s) have records
+        all_names = [format_species_name(valid_species)] + synonyms_found
+        return {
+            'representation': 'Valid + synonym(s)',
+            'names_with_records': ','.join(all_names),
+            'synonym_only_flag': ''
+        }
+    elif valid_found and not synonyms_found:
+        # Only valid name has records
+        return {
+            'representation': 'Valid name only',
+            'names_with_records': format_species_name(valid_species),
+            'synonym_only_flag': ''
+        }
+    elif not valid_found and synonyms_found:
+        # PROBLEM: Only synonym(s) have records, valid name absent
+        return {
+            'representation': 'Synonym only',
+            'names_with_records': ','.join(synonyms_found),
+            'synonym_only_flag': '⚠️'
+        }
+    else:
+        # Neither valid nor synonyms found
+        return {
+            'representation': 'No records',
+            'names_with_records': '',
+            'synonym_only_flag': ''
+        }
+
+
+def determine_species_category(
+    species: str,
+    taxonid_bins: Set[str],
+    valid_species_set: Set[str],
+    synonym_to_valid: Dict[str, str],
+    all_input_species_bins: Set[str],
+    bin_to_species: Dict[str, Set[str]]
+) -> Dict:
+    """
+    Categorize species and find associated input species if applicable.
+    
+    Determines whether a species is:
+    - Valid (from input list)
+    - Synonym (from input list)
+    - Extra species (not on list, doesn't share BIN with input species)
+    - Extra BIN (shares BIN with input species)
+    
+    Args:
+        species: Species name (lowercase)
+        taxonid_bins: Set of BIN URIs for this specific taxonid
+        valid_species_set: Set of valid species names (original case) from input
+        synonym_to_valid: Dict mapping synonym (lowercase) -> valid species (lowercase)
+        all_input_species_bins: Set of all BIN URIs associated with input species
+        bin_to_species: Dict mapping BIN_uri -> set of species (lowercase)
+    
+    Returns:
+        Dict with:
+        - category: str - "Valid" | "Synonym" | "Extra species" | "Extra BIN"
+        - associated_input_species: str - Comma-separated list of input species sharing BINs
+    """
+    species_lower = species.lower()
+    
+    # Check if species is a valid species from input list
+    if species in valid_species_set or species_lower in valid_species_set:
+        return {
+            'category': 'Valid',
+            'associated_input_species': ''
+        }
+    
+    # Check if species is a synonym from input list
+    if species_lower in synonym_to_valid:
+        return {
+            'category': 'Synonym',
+            'associated_input_species': ''
+        }
+    
+    # Not on input list - check if it shares BINs with input species
+    if not taxonid_bins:
+        # No BINs for this taxonid
+        return {
+            'category': 'Extra species',
+            'associated_input_species': ''
+        }
+    
+    # Check if any of this species' BINs overlap with input species BINs
+    shared_bins = taxonid_bins.intersection(all_input_species_bins)
+    
+    if shared_bins:
+        # This species shares BINs with input species
+        # Find which input species share these BINs
+        associated_species = set()
+        
+        for bin_uri in shared_bins:
+            # Get all species in this BIN
+            species_in_bin = bin_to_species.get(bin_uri, set())
+            
+            # Filter to only input species (valid or synonym)
+            for sp in species_in_bin:
+                # Check if this is a valid species or synonym from input
+                if sp in valid_species_set or sp.lower() in [v.lower() for v in valid_species_set]:
+                    associated_species.add(format_species_name(sp))
+                elif sp in synonym_to_valid:
+                    # Add the valid species this synonym maps to
+                    valid_sp = synonym_to_valid[sp]
+                    associated_species.add(format_species_name(valid_sp))
+        
+        return {
+            'category': 'Extra BIN',
+            'associated_input_species': ','.join(sorted(associated_species))
+        }
+    else:
+        # Doesn't share any BINs with input species
+        return {
+            'category': 'Extra species',
+            'associated_input_species': ''
+        }
+
+
+def analyze_sharer_names(
+    sharers: str,
+    focal_species: str,
+    species_synonyms: Dict[str, List[str]],
+    synonym_to_valid: Dict[str, str]
+) -> Dict:
+    """
+    Analyze sharers for BAGS E assessment.
+    
+    For BAGS grade E (multiple species sharing a BIN), this analyzes:
+    1. Whether sharers are known synonyms from the input list
+    2. Whether sharer names are proper Linnean binomials
+    
+    Args:
+        sharers: Pipe-separated list of species names sharing the BIN
+        focal_species: The species being analyzed (lowercase)
+        species_synonyms: Dict mapping valid species (lowercase) -> list of synonyms
+        synonym_to_valid: Dict mapping synonym (lowercase) -> valid species (lowercase)
+    
+    Returns:
+        Dict with:
+        - sharer_status: str - "All known synonyms" | "Mix (synonyms + extras)" | 
+                              "No known synonyms" | "N/A - not on list"
+        - sharer_type: str - "All Linnean" | "Contains non-Linnean"
+    """
+    if not sharers or sharers.strip() == '':
+        return {
+            'sharer_status': '',
+            'sharer_type': ''
+        }
+    
+    # Split sharers
+    sharer_list = [s.strip() for s in sharers.split('|') if s.strip()]
+    
+    if not sharer_list:
+        return {
+            'sharer_status': '',
+            'sharer_type': ''
+        }
+    
+    # Check if focal species is on the input list
+    focal_on_list = (focal_species in species_synonyms or 
+                     focal_species in synonym_to_valid)
+    
+    if not focal_on_list:
+        # Cannot assess synonym status if focal species not on input list
+        sharer_status = 'N/A - not on list'
+    else:
+        # Analyze synonym status
+        known_synonyms = 0
+        unknown_species = 0
+        
+        # Get all synonyms from input list (for any valid species)
+        all_input_synonyms = set()
+        for valid_sp, syn_list in species_synonyms.items():
+            all_input_synonyms.update([s.lower() for s in syn_list])
+        
+        for sharer in sharer_list:
+            sharer_lower = sharer.lower()
+            
+            # Check if this sharer is a known synonym or valid species from input
+            if (sharer_lower in all_input_synonyms or 
+                sharer_lower in species_synonyms):
+                known_synonyms += 1
+            else:
+                unknown_species += 1
+        
+        # Determine status
+        if known_synonyms > 0 and unknown_species == 0:
+            sharer_status = 'All known synonyms'
+        elif known_synonyms > 0 and unknown_species > 0:
+            sharer_status = 'Mix (synonyms + extras)'
+        else:
+            sharer_status = 'No known synonyms'
+    
+    # Analyze Linnean name format
+    all_linnean = True
+    for sharer in sharer_list:
+        if not is_linnean_name(sharer):
+            all_linnean = False
+            break
+    
+    if all_linnean:
+        sharer_type = 'All Linnean'
+    else:
+        sharer_type = 'Contains non-Linnean'
+    
+    return {
+        'sharer_status': sharer_status,
+        'sharer_type': sharer_type
+    }
+
+
+def get_all_input_species_bins(
+    species_synonyms: Dict[str, List[str]],
+    species_to_bins: Dict[str, Set[str]]
+) -> Set[str]:
+    """
+    Get all BINs associated with input species list (valid species + synonyms).
+    
+    This is used to identify "Extra BIN" category - species not on the input list
+    but sharing BINs with species that are on the list.
+    
+    Args:
+        species_synonyms: Dict mapping valid species (lowercase) -> list of synonyms
+        species_to_bins: Dict mapping species (lowercase) -> set of BIN_uris
+    
+    Returns:
+        Set[str]: All BIN URIs associated with input species
+    """
+    all_bins = set()
+    
+    # Get BINs for all valid species
+    for valid_species in species_synonyms.keys():
+        bins = species_to_bins.get(valid_species, set())
+        all_bins.update(bins)
+    
+    # Get BINs for all synonyms
+    for valid_species, synonyms in species_synonyms.items():
+        for synonym in synonyms:
+            synonym_lower = synonym.lower()
+            bins = species_to_bins.get(synonym_lower, set())
+            all_bins.update(bins)
+    
+    return all_bins
+
+
 def parse_species_list(species_file: Path) -> Tuple[Dict[str, List[str]], Set[str], Dict[str, str]]:
     """
     Parse species list with optional synonyms.
@@ -375,6 +918,10 @@ def perform_gap_analysis(
     """
     logging.info("Performing gap analysis...")
     
+    # Pre-compute all BINs associated with input species (for Extra BIN detection)
+    all_input_species_bins = get_all_input_species_bins(species_synonyms, species_to_bins)
+    logging.info(f"Found {len(all_input_species_bins)} unique BINs associated with input species")
+    
     results = []
     processed_species = set()
     
@@ -389,83 +936,234 @@ def perform_gap_analysis(
                 # Get BAGS data for this taxonid
                 bags_info = bags_data.get(taxonid, {})
                 
+                # Get BINs for this taxonid
+                bin_field = bags_info.get('BIN', '')
+                taxonid_bins = set([b.strip() for b in bin_field.split('|') if b.strip()]) if bin_field else set()
+                
+                # NEW: Calculate species-level and BIN-level record counts
+                species_total_records = species_record_count.get(species_lower, 0)
+                bin_total_records = sum(bin_record_count.get(b, 0) for b in taxonid_bins)
+                
+                # NEW: Analyze synonym-BIN distribution
+                syn_analysis = analyze_synonym_bin_distribution(
+                    species_lower, synonyms, species_to_bins
+                )
+                
+                # NEW: Check name representation
+                name_rep = check_name_representation(
+                    species_lower, synonyms, all_species_in_results
+                )
+                
+                # NEW: Determine species category
+                category_info = determine_species_category(
+                    species_lower, taxonid_bins, valid_species_set,
+                    synonym_to_valid, all_input_species_bins, bin_to_species
+                )
+                
+                # NEW: Analyze BAGS E sharers (only if BAGS grade E)
+                if bags_info.get('BAGS', '') == 'E':
+                    sharer_analysis = analyze_sharer_names(
+                        bags_info.get('sharers', ''),
+                        species_lower,
+                        species_synonyms,
+                        synonym_to_valid
+                    )
+                else:
+                    sharer_analysis = {'sharer_status': '', 'sharer_type': ''}
+                
                 result = {
-                    'species': format_species_name(species_lower),  # Proper format: Genus species (or Genus species subspecies)
+                    # Core identification
+                    'species': format_species_name(species_lower),
                     'synonyms': '|'.join(synonyms) if synonyms else '',
-                    'gaplist_species': 'Valid',  # Matched valid species in input gap list
-                    'BAGS_grade': bags_info.get('BAGS', ''),
-                    'BIN_uri': bags_info.get('BIN', ''),
-                    'sharers': bags_info.get('sharers', ''),
+                    
+                    # Classification (NEW: species_category replaces gaplist_species)
+                    'species_category': category_info['category'],
+                    'associated_input_species': category_info['associated_input_species'],
+                    
+                    # Record counts
                     'total_record_count': taxonid_record_count.get(taxonid, 0),
+                    'species_record_count': species_total_records,  # NEW
+                    'BIN_record_count': bin_total_records,  # NEW
+                    
+                    # BAGS assessment
+                    'BAGS_grade': bags_info.get('BAGS', ''),
+                    
+                    # BIN info
+                    'BIN_uri': bin_field,
+                    'sharers': bags_info.get('sharers', ''),
+                    
+                    # Synonym-BIN analysis (NEW)
+                    'synonym_BIN_status': syn_analysis['status'],
+                    'synonym_BIN_details': syn_analysis['details'],
+                    
+                    # Name representation (NEW)
+                    'name_representation': name_rep['representation'],
+                    'names_with_records': name_rep['names_with_records'],
+                    'synonym_only_flag': name_rep['synonym_only_flag'],
+                    
+                    # BAGS E analysis (NEW)
+                    'BAGS_E_sharer_status': sharer_analysis['sharer_status'],
+                    'BAGS_E_sharer_type': sharer_analysis['sharer_type'],
+                    
+                    # Taxonomy
                     'kingdom': taxonomy.get('kingdom', ''),
                     'phylum': taxonomy.get('phylum', ''),
                     'class': taxonomy.get('class', ''),
                     'order': taxonomy.get('order', ''),
                     'family': taxonomy.get('family', ''),
-                    'genus': taxonomy.get('genus', '')
+                    'genus': taxonomy.get('genus', ''),
+                    'taxonomy_source': 'Direct'  # NEW
                 }
                 results.append(result)
         else:
-            # Species in input list but not in results
+            # Species in input list but NOT in results (0 records)
+            # Infer taxonomy from genus
+            inferred = infer_taxonomy_from_genus(species_lower, genus_to_taxonomy)
+            
+            # For species with 0 records, analyze what we can
+            syn_analysis = analyze_synonym_bin_distribution(
+                species_lower, synonyms, species_to_bins
+            )
+            
+            name_rep = check_name_representation(
+                species_lower, synonyms, all_species_in_results
+            )
+            
             result = {
-                'species': format_species_name(species_lower),  # Proper format: Genus species
+                # Core identification
+                'species': format_species_name(species_lower),
                 'synonyms': '|'.join(synonyms) if synonyms else '',
-                'gaplist_species': 'Valid',  # Matched valid species in input gap list
+                
+                # Classification
+                'species_category': 'Valid',
+                'associated_input_species': '',
+                
+                # Record counts (all zeros)
+                'total_record_count': 0,
+                'species_record_count': 0,
+                'BIN_record_count': 0,
+                
+                # BAGS assessment (empty)
                 'BAGS_grade': '',
+                
+                # BIN info (empty)
                 'BIN_uri': '',
                 'sharers': '',
-                'total_record_count': 0,
-                'kingdom': '',
-                'phylum': '',
-                'class': '',
-                'order': '',
-                'family': '',
-                'genus': ''
+                
+                # Synonym-BIN analysis
+                'synonym_BIN_status': syn_analysis['status'],
+                'synonym_BIN_details': syn_analysis['details'],
+                
+                # Name representation
+                'name_representation': name_rep['representation'],
+                'names_with_records': name_rep['names_with_records'],
+                'synonym_only_flag': name_rep['synonym_only_flag'],
+                
+                # BAGS E analysis (empty - no BAGS grade)
+                'BAGS_E_sharer_status': '',
+                'BAGS_E_sharer_type': '',
+                
+                # Taxonomy (inferred)
+                'kingdom': inferred['taxonomy'].get('kingdom', ''),
+                'phylum': inferred['taxonomy'].get('phylum', ''),
+                'class': inferred['taxonomy'].get('class', ''),
+                'order': inferred['taxonomy'].get('order', ''),
+                'family': inferred['taxonomy'].get('family', ''),
+                'genus': inferred['taxonomy'].get('genus', ''),
+                'taxonomy_source': inferred['source']
             }
             results.append(result)
     
-    # Process species found in results but NOT in input list (check for synonyms or mark as No)
+    # Process species found in results but NOT in input list (Extra species or synonyms)
     for species_lower, taxonid_list in species_taxonid_map.items():
         if species_lower not in processed_species:
-            # Check if this species is a synonym
-            if species_lower in synonym_to_valid:
-                # This species matches a synonym
-                gaplist_value = 'Synonym'
-            else:
-                # This species is not in the input gap list at all
-                gaplist_value = 'No'
             
             for taxonid, taxonomy in taxonid_list:
                 bags_info = bags_data.get(taxonid, {})
                 
+                # Get BINs for this taxonid
+                bin_field = bags_info.get('BIN', '')
+                taxonid_bins = set([b.strip() for b in bin_field.split('|') if b.strip()]) if bin_field else set()
+                
+                # Calculate record counts
+                species_total_records = species_record_count.get(species_lower, 0)
+                bin_total_records = sum(bin_record_count.get(b, 0) for b in taxonid_bins)
+                
+                # Determine species category (Valid/Synonym/Extra species/Extra BIN)
+                category_info = determine_species_category(
+                    species_lower, taxonid_bins, valid_species_set,
+                    synonym_to_valid, all_input_species_bins, bin_to_species
+                )
+                
+                # Analyze BAGS E sharers (only if BAGS grade E)
+                if bags_info.get('BAGS', '') == 'E':
+                    sharer_analysis = analyze_sharer_names(
+                        bags_info.get('sharers', ''),
+                        species_lower,
+                        species_synonyms,
+                        synonym_to_valid
+                    )
+                else:
+                    sharer_analysis = {'sharer_status': '', 'sharer_type': ''}
+                
                 result = {
-                    'species': format_species_name(species_lower),  # Proper format: Genus species (or Genus species subspecies)
-                    'synonyms': '',
-                    'gaplist_species': gaplist_value,  # Either 'Synonym' or 'No'
-                    'BAGS_grade': bags_info.get('BAGS', ''),
-                    'BIN_uri': bags_info.get('BIN', ''),
-                    'sharers': bags_info.get('sharers', ''),
+                    # Core identification
+                    'species': format_species_name(species_lower),
+                    'synonyms': '',  # Extra species don't have synonyms listed
+                    
+                    # Classification
+                    'species_category': category_info['category'],
+                    'associated_input_species': category_info['associated_input_species'],
+                    
+                    # Record counts
                     'total_record_count': taxonid_record_count.get(taxonid, 0),
+                    'species_record_count': species_total_records,
+                    'BIN_record_count': bin_total_records,
+                    
+                    # BAGS assessment
+                    'BAGS_grade': bags_info.get('BAGS', ''),
+                    
+                    # BIN info
+                    'BIN_uri': bin_field,
+                    'sharers': bags_info.get('sharers', ''),
+                    
+                    # Synonym-BIN analysis (N/A for extra species)
+                    'synonym_BIN_status': 'N/A',
+                    'synonym_BIN_details': '',
+                    
+                    # Name representation (N/A for extra species)
+                    'name_representation': 'N/A',
+                    'names_with_records': format_species_name(species_lower),
+                    'synonym_only_flag': '',
+                    
+                    # BAGS E analysis
+                    'BAGS_E_sharer_status': sharer_analysis['sharer_status'],
+                    'BAGS_E_sharer_type': sharer_analysis['sharer_type'],
+                    
+                    # Taxonomy (direct from data)
                     'kingdom': taxonomy.get('kingdom', ''),
                     'phylum': taxonomy.get('phylum', ''),
                     'class': taxonomy.get('class', ''),
                     'order': taxonomy.get('order', ''),
                     'family': taxonomy.get('family', ''),
-                    'genus': taxonomy.get('genus', '')
+                    'genus': taxonomy.get('genus', ''),
+                    'taxonomy_source': 'Direct'
                 }
                 results.append(result)
     
     logging.info(f"Gap analysis complete: {len(results)} total entries")
     
-    # Summary statistics
-    valid_species_count = len([r for r in results if r['gaplist_species'] == 'Valid'])
-    synonym_species_count = len([r for r in results if r['gaplist_species'] == 'Synonym'])
-    non_gaplist_species_count = len([r for r in results if r['gaplist_species'] == 'No'])
+    # Summary statistics (using new species_category column)
+    valid_species_count = len([r for r in results if r['species_category'] == 'Valid'])
+    synonym_species_count = len([r for r in results if r['species_category'] == 'Synonym'])
+    extra_species_count = len([r for r in results if r['species_category'] == 'Extra species'])
+    extra_bin_count = len([r for r in results if r['species_category'] == 'Extra BIN'])
     species_with_bags = len([r for r in results if r['BAGS_grade']])
     
-    logging.info(f"  - Valid species (from gap list): {valid_species_count}")
-    logging.info(f"  - Synonym species: {synonym_species_count}")
-    logging.info(f"  - Non-gap list species: {non_gaplist_species_count}")
+    logging.info(f"  - Valid species (from input list): {valid_species_count}")
+    logging.info(f"  - Synonym species (from input list): {synonym_species_count}")
+    logging.info(f"  - Extra species (not on list): {extra_species_count}")
+    logging.info(f"  - Extra BIN (shares BIN with input species): {extra_bin_count}")
     logging.info(f"  - Species with BAGS assessment: {species_with_bags}")
     
     return results
@@ -476,19 +1174,47 @@ def write_gap_analysis(results: List[Dict], output_file: Path) -> None:
     logging.info(f"Writing gap analysis to {output_file}")
     
     fieldnames = [
+        # Core identification
         'species',
         'synonyms',
-        'gaplist_species',
-        'BAGS_grade',
-        'BIN_uri',
-        'sharers',
-        'total_record_count',
-        'kingdom',
-        'phylum',
-        'class',
-        'order',
-        'family',
-        'genus'
+        
+        # Classification
+        'species_category',              # NEW (replaces gaplist_species)
+        'associated_input_species',      # NEW
+        
+        # Record counts
+        'total_record_count',            # EXISTING
+        'species_record_count',          # NEW
+        'BIN_record_count',              # NEW
+        
+        # BAGS assessment
+        'BAGS_grade',                    # EXISTING
+        
+        # BIN info
+        'BIN_uri',                       # EXISTING
+        'sharers',                       # EXISTING
+        
+        # Synonym-BIN analysis
+        'synonym_BIN_status',            # NEW
+        'synonym_BIN_details',           # NEW
+        
+        # Name representation
+        'name_representation',           # NEW
+        'names_with_records',            # NEW
+        'synonym_only_flag',             # NEW
+        
+        # BAGS E analysis
+        'BAGS_E_sharer_status',          # NEW
+        'BAGS_E_sharer_type',            # NEW
+        
+        # Taxonomy
+        'kingdom',                       # EXISTING
+        'phylum',                        # EXISTING
+        'class',                         # EXISTING
+        'order',                         # EXISTING
+        'family',                        # EXISTING
+        'genus',                         # EXISTING
+        'taxonomy_source'                # NEW
     ]
     
     try:
