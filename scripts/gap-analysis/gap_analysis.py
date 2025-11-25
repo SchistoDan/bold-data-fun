@@ -438,8 +438,9 @@ def determine_species_category(
     """
     species_lower = species.lower()
     
-    # Check if species is a valid species from input list
-    if species in valid_species_set or species_lower in valid_species_set:
+    # Check if species is a valid species from input list (case-insensitive)
+    valid_species_lower = {v.lower() for v in valid_species_set}
+    if species_lower in valid_species_lower:
         return {
             'category': 'Valid',
             'associated_input_species': ''
