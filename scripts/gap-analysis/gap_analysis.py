@@ -731,7 +731,7 @@ def load_assessed_bags(bags_file: Path) -> Dict[str, Dict]:
     sys.exit(1)
 
 
-def load_result_output(result_file: Path) -> Tuple[Dict, Dict, Dict, Dict, Dict, Dict, Set, Dict]:
+def load_result_output(result_file: Path) -> Tuple[Dict, Dict, Dict, Dict, Set, Dict]:
     """
     Load result_output.tsv and extract species information with enhanced data structures.
     
@@ -743,8 +743,6 @@ def load_result_output(result_file: Path) -> Tuple[Dict, Dict, Dict, Dict, Dict,
         Tuple of:
         - species_taxonid_map: dict mapping species (lowercase) -> list of (taxonid, taxonomy_dict)
         - taxonid_record_count: dict mapping taxonid -> count of records
-        - species_record_count: dict mapping species (lowercase) -> total count of records
-        - bin_record_count: dict mapping BIN_uri -> total count of records
         - species_to_bins: dict mapping species (lowercase) -> set of BIN_uris
         - bin_to_species: dict mapping BIN_uri -> set of species (lowercase)
         - all_species_in_results: set of all species names (lowercase) found in results
@@ -754,8 +752,6 @@ def load_result_output(result_file: Path) -> Tuple[Dict, Dict, Dict, Dict, Dict,
     
     species_taxonid_map = defaultdict(list)
     taxonid_record_count = defaultdict(int)
-    species_record_count = defaultdict(int)
-    bin_record_count = defaultdict(int)
     species_to_bins = defaultdict(set)
     bin_to_species = defaultdict(set)
     all_species_in_results = set()
@@ -800,9 +796,6 @@ def load_result_output(result_file: Path) -> Tuple[Dict, Dict, Dict, Dict, Dict,
                     # Count records per taxonid
                     taxonid_record_count[taxonid] += 1
                     
-                    # Count records per species
-                    species_record_count[species_lower] += 1
-                    
                     # Track all species names in results
                     all_species_in_results.add(species_lower)
                     
@@ -812,9 +805,8 @@ def load_result_output(result_file: Path) -> Tuple[Dict, Dict, Dict, Dict, Dict,
                         # Split on pipe and clean up each BIN
                         bin_uris = [b.strip() for b in bin_field.split('|') if b.strip()]
                     
-                    # Count records per BIN and build species-BIN mappings
+                    # Build species-BIN mappings
                     for bin_uri in bin_uris:
-                        bin_record_count[bin_uri] += 1
                         species_to_bins[species_lower].add(bin_uri)
                         bin_to_species[bin_uri].add(species_lower)
                     
@@ -864,13 +856,10 @@ def load_result_output(result_file: Path) -> Tuple[Dict, Dict, Dict, Dict, Dict,
             logging.info(f"Found {len(taxonid_record_count)} unique taxonids")
             logging.info(f"Built genus-to-taxonomy mapping for {len(genus_to_taxonomy)} genera")
             logging.info(f"Tracked {len(all_species_in_results)} unique species names")
-            logging.info(f"Found {len(bin_record_count)} unique BINs")
             
             return (
                 dict(species_taxonid_map),
                 dict(taxonid_record_count),
-                dict(species_record_count),
-                dict(bin_record_count),
                 dict(species_to_bins),
                 dict(bin_to_species),
                 all_species_in_results,
@@ -905,8 +894,6 @@ def perform_gap_analysis(
     species_taxonid_map: Dict,
     taxonid_record_count: Dict,
     bags_data: Dict,
-    species_record_count: Dict,
-    bin_record_count: Dict,
     species_to_bins: Dict,
     bin_to_species: Dict,
     all_species_in_results: Set,
@@ -940,10 +927,6 @@ def perform_gap_analysis(
                 # Get BINs for this taxonid
                 bin_field = bags_info.get('BIN', '')
                 taxonid_bins = set([b.strip() for b in bin_field.split('|') if b.strip()]) if bin_field else set()
-                
-                # NEW: Calculate species-level and BIN-level record counts
-                species_total_records = species_record_count.get(species_lower, 0)
-                bin_total_records = sum(bin_record_count.get(b, 0) for b in taxonid_bins)
                 
                 # NEW: Analyze synonym-BIN distribution
                 syn_analysis = analyze_synonym_bin_distribution(
@@ -983,8 +966,6 @@ def perform_gap_analysis(
                     
                     # Record counts
                     'total_record_count': taxonid_record_count.get(taxonid, 0),
-                    'species_record_count': species_total_records,  # NEW
-                    'BIN_record_count': bin_total_records,  # NEW
                     
                     # BAGS assessment
                     'BAGS_grade': bags_info.get('BAGS', ''),
@@ -1041,8 +1022,6 @@ def perform_gap_analysis(
                 
                 # Record counts (all zeros)
                 'total_record_count': 0,
-                'species_record_count': 0,
-                'BIN_record_count': 0,
                 
                 # BAGS assessment (empty)
                 'BAGS_grade': '',
@@ -1086,10 +1065,6 @@ def perform_gap_analysis(
                 bin_field = bags_info.get('BIN', '')
                 taxonid_bins = set([b.strip() for b in bin_field.split('|') if b.strip()]) if bin_field else set()
                 
-                # Calculate record counts
-                species_total_records = species_record_count.get(species_lower, 0)
-                bin_total_records = sum(bin_record_count.get(b, 0) for b in taxonid_bins)
-                
                 # Determine species category (Valid/Synonym/Extra species/Extra BIN)
                 category_info = determine_species_category(
                     species_lower, taxonid_bins, valid_species_set,
@@ -1118,8 +1093,6 @@ def perform_gap_analysis(
                     
                     # Record counts
                     'total_record_count': taxonid_record_count.get(taxonid, 0),
-                    'species_record_count': species_total_records,
-                    'BIN_record_count': bin_total_records,
                     
                     # BAGS assessment
                     'BAGS_grade': bags_info.get('BAGS', ''),
@@ -1185,8 +1158,6 @@ def write_gap_analysis(results: List[Dict], output_file: Path) -> None:
         
         # Record counts
         'total_record_count',            # EXISTING
-        'species_record_count',          # NEW
-        'BIN_record_count',              # NEW
         
         # BAGS assessment
         'BAGS_grade',                    # EXISTING
@@ -1341,8 +1312,8 @@ Examples:
     # Load all data
     species_synonyms, valid_species_set, synonym_to_valid = parse_species_list(species_list_path)
     bags_data = load_assessed_bags(args.assessed_bags)
-    (species_taxonid_map, taxonid_record_count, species_record_count,
-     bin_record_count, species_to_bins, bin_to_species,
+    (species_taxonid_map, taxonid_record_count,
+     species_to_bins, bin_to_species,
      all_species_in_results, genus_to_taxonomy) = load_result_output(args.result_output)
     
     # Perform gap analysis
@@ -1353,8 +1324,6 @@ Examples:
         species_taxonid_map,
         taxonid_record_count,
         bags_data,
-        species_record_count,
-        bin_record_count,
         species_to_bins,
         bin_to_species,
         all_species_in_results,
