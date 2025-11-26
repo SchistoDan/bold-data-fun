@@ -4,7 +4,7 @@ A Python script that performs comprehensive gap analysis for DNA barcode library
 
 ## Overview
 
-This tool uses the output of the [BOLDetective](../../README.md) pipeline for analysing animal barcode data quality in BOLD. It identifies coverage gaps, taxonomic inconsistencies, and data quality issues by cross-referencing:
+This tool uses the output of the [BOLDetective](https://github.com/bge-barcoding/bold-library-curation) pipeline for analysing animal barcode data quality in BOLD. It identifies coverage gaps, taxonomic inconsistencies, and data quality issues by cross-referencing:
 
 1. **Input species list** — Target species with optional synonyms
 2. **Result output** — BOLD database records (`result_output.tsv`)
