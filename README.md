@@ -21,3 +21,6 @@ Creates hierarchical sunburst charts from CSV data with support for 3-5 levels o
 
 #### [Project Search](scripts/project-search)
 Identifies BOLD records from specified projects that meet filtering criteria related to species gaps, BAGS grades, and UK representation in BINs. Processes species lists with synonyms and generates detailed results with family-level summaries.
+
+#### [Gap Analysis](scripts/gap-analysis)
+Performs comprehensive gap analysis for DNA barcode library curation by comparing target species lists against BOLD (Barcode of Life Data) database records and BAGS (Barcode, Audit & Grade System) assessments output from [BOLDetective](https://github.com/bge-barcoding/bold-library-curation).
