@@ -103,7 +103,7 @@ Tab-separated BAGS assessment output containing:
 
 ### Gap Analysis TSV
 
-The script produces a comprehensive TSV file with 23 columns organised into logical groups:
+The script produces a comprehensive TSV file with 24 columns organised into logical groups:
 
 #### Core Identification
 | Column | Description |
@@ -140,6 +140,7 @@ The script produces a comprehensive TSV file with 23 columns organised into logi
 |--------|-------------|
 | `name_representation` | Valid name only, Valid + synonym(s), Synonym only, No records, or N/A |
 | `names_with_records` | Comma-separated list of names found in BOLD |
+| `synonym_record_count` | Total records across all synonyms found in BOLD (0 if none) |
 | `synonym_only_flag` | ⚠️ warning if only synonym has records |
 
 #### BAGS Grade E Analysis
