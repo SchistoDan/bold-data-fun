@@ -330,7 +330,9 @@ def analyze_synonym_bin_distribution(
 def check_name_representation(
     valid_species: str,
     synonyms: List[str],
-    all_species_in_results: Set[str]
+    all_species_in_results: Set[str],
+    species_taxonid_map: Dict,
+    taxonid_record_count: Dict
 ) -> Dict:
     """
     Check whether valid name and/or synonyms appear in dataset.
@@ -342,12 +344,15 @@ def check_name_representation(
         valid_species: Valid species name (lowercase)
         synonyms: List of synonym names (original case)
         all_species_in_results: Set of all species names (lowercase) found in results
+        species_taxonid_map: Dict mapping species (lowercase) -> list of (taxonid, taxonomy_dict)
+        taxonid_record_count: Dict mapping taxonid -> count of records
     
     Returns:
         Dict with:
         - representation: str - "Valid name only" | "Valid + synonym(s)" | 
                                "Synonym only" | "No records" | "N/A - no synonyms"
         - names_with_records: str - Comma-separated list of names found
+        - synonym_record_count: int - Total records across all found synonyms (0 if none)
         - synonym_only_flag: str - "⚠️" if synonym-only, else ""
     """
     # Check if species has no synonyms
@@ -357,12 +362,14 @@ def check_name_representation(
             return {
                 'representation': 'N/A - no synonyms',
                 'names_with_records': format_species_name(valid_species),
+                'synonym_record_count': 0,
                 'synonym_only_flag': ''
             }
         else:
             return {
                 'representation': 'N/A - no synonyms',
                 'names_with_records': '',
+                'synonym_record_count': 0,
                 'synonym_only_flag': ''
             }
     
@@ -370,9 +377,15 @@ def check_name_representation(
     valid_found = valid_species in all_species_in_results
     
     synonyms_found = []
+    synonym_record_count = 0
     for syn in synonyms:
-        if syn.lower() in all_species_in_results:
+        syn_lower = syn.lower()
+        if syn_lower in all_species_in_results:
             synonyms_found.append(syn)
+            # Sum records across all taxonids for this synonym
+            if syn_lower in species_taxonid_map:
+                for taxonid, _ in species_taxonid_map[syn_lower]:
+                    synonym_record_count += taxonid_record_count.get(taxonid, 0)
     
     # Determine representation status
     if valid_found and synonyms_found:
@@ -381,6 +394,7 @@ def check_name_representation(
         return {
             'representation': 'Valid + synonym(s)',
             'names_with_records': ','.join(all_names),
+            'synonym_record_count': synonym_record_count,
             'synonym_only_flag': ''
         }
     elif valid_found and not synonyms_found:
@@ -388,6 +402,7 @@ def check_name_representation(
         return {
             'representation': 'Valid name only',
             'names_with_records': format_species_name(valid_species),
+            'synonym_record_count': synonym_record_count,
             'synonym_only_flag': ''
         }
     elif not valid_found and synonyms_found:
@@ -395,6 +410,7 @@ def check_name_representation(
         return {
             'representation': 'Synonym only',
             'names_with_records': ','.join(synonyms_found),
+            'synonym_record_count': synonym_record_count,
             'synonym_only_flag': '⚠️'
         }
     else:
@@ -402,6 +418,7 @@ def check_name_representation(
         return {
             'representation': 'No records',
             'names_with_records': '',
+            'synonym_record_count': synonym_record_count,
             'synonym_only_flag': ''
         }
 
@@ -935,7 +952,8 @@ def perform_gap_analysis(
                 
                 # NEW: Check name representation
                 name_rep = check_name_representation(
-                    species_lower, synonyms, all_species_in_results
+                    species_lower, synonyms, all_species_in_results,
+                    species_taxonid_map, taxonid_record_count
                 )
                 
                 # NEW: Determine species category
@@ -981,6 +999,7 @@ def perform_gap_analysis(
                     # Name representation (NEW)
                     'name_representation': name_rep['representation'],
                     'names_with_records': name_rep['names_with_records'],
+                    'synonym_record_count': name_rep['synonym_record_count'],
                     'synonym_only_flag': name_rep['synonym_only_flag'],
                     
                     # BAGS E analysis (NEW)
@@ -1008,7 +1027,8 @@ def perform_gap_analysis(
             )
             
             name_rep = check_name_representation(
-                species_lower, synonyms, all_species_in_results
+                species_lower, synonyms, all_species_in_results,
+                species_taxonid_map, taxonid_record_count
             )
             
             result = {
@@ -1037,6 +1057,7 @@ def perform_gap_analysis(
                 # Name representation
                 'name_representation': name_rep['representation'],
                 'names_with_records': name_rep['names_with_records'],
+                'synonym_record_count': name_rep['synonym_record_count'],
                 'synonym_only_flag': name_rep['synonym_only_flag'],
                 
                 # BAGS E analysis (empty - no BAGS grade)
@@ -1108,6 +1129,7 @@ def perform_gap_analysis(
                     # Name representation (N/A for extra species)
                     'name_representation': 'N/A',
                     'names_with_records': format_species_name(species_lower),
+                    'synonym_record_count': 0,
                     'synonym_only_flag': '',
                     
                     # BAGS E analysis
@@ -1173,6 +1195,7 @@ def write_gap_analysis(results: List[Dict], output_file: Path) -> None:
         # Name representation
         'name_representation',           # NEW
         'names_with_records',            # NEW
+        'synonym_record_count',          # NEW
         'synonym_only_flag',             # NEW
         
         # BAGS E analysis
