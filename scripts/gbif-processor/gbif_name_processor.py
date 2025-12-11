@@ -195,7 +195,7 @@ def process_file(input_file: str, rules_file: str, output_dir: str = None):
                 })
             elif result['name_to_use'] == 'gbif':
                 gbif_rows.append({
-                    'verbatimScientificName': result['verbatim_name']
+                    'verbatimScientificName': result['gbif_species']
                 })
     
     # Write request_taxid.tsv
