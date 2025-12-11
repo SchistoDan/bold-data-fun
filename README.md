@@ -24,3 +24,6 @@ Identifies BOLD records from specified projects that meet filtering criteria rel
 
 #### [Gap Analysis](scripts/gap-analysis)
 Performs comprehensive gap analysis for DNA barcode library curation by comparing target species lists against BOLD (Barcode of Life Data) database records and BAGS (Barcode, Audit & Grade System) assessments output from [BOLDetective](https://github.com/bge-barcoding/bold-library-curation).
+
+#### [GBIF Processor](scripts/gbif-processor)
+Automates taxonomic name decisions when reconciling specimen names against GBIF's backbone taxonomy. Uses a configurable rules matrix to determine whether to use original names (e.g., for type specimens) or GBIF-accepted names based on match status, type, and name differences. Generates separate outputs for taxonomy requests and ENA/NCBI verification.
