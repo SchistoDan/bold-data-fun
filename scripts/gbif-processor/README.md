@@ -95,7 +95,7 @@ CSV file for names where **GBIF name** should be used — these need checking ag
 
 | Column | Description |
 |--------|-------------|
-| `verbatimScientificName` | The original name (to look up under GBIF's accepted name) |
+| `verbatimScientificName` | The GBIF-accepted species name to check in ENA/NCBI |
 
 ### 3. `{input}_annotated.csv`
 
