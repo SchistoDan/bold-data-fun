@@ -24,6 +24,29 @@ Basic Examples:
     # Four or five level hierarchies
     python sunburst_script.py data.csv --level4 "Order" --level5 "Family"
 
+Grouping Examples:
+    # Keep top 10 items per level, aggregate rest into "Other"
+    python sunburst_script.py data.csv --top-n 10
+
+    # Use global threshold (percentage of total dataset)
+    python sunburst_script.py data.csv --threshold 2.0 --threshold-mode global
+
+    # Combined: top 8 items, then filter out anything < 1% globally
+    python sunburst_script.py data.csv --top-n 8 --threshold 1.0 --threshold-mode global
+
+Label Formatting Examples:
+    # Show only names (no counts)
+    python sunburst_script.py data.csv --label-style name-only
+
+    # Show names with percentages
+    python sunburst_script.py data.csv --label-style name-percent
+
+    # Full labels: name, count, and percentage
+    python sunburst_script.py data.csv --label-style full
+
+    # Add percentage to default name-count style
+    python sunburst_script.py data.csv --show-percent
+
 Advanced Examples:
     # Color inheritance with variations (progressive shading)
     python sunburst_script.py data.csv --color-inherit-level 1 --color-mode variations
@@ -34,10 +57,16 @@ Advanced Examples:
     # Aggregate small slices and control labeling
     python sunburst_script.py data.csv --threshold 10.0 --label-threshold 6.0
 
+    # Disable adaptive font sizing (use legacy fixed sizes)
+    python sunburst_script.py data.csv --no-adaptive-font
+
 Key Features:
     - Multi-level hierarchy support (3-5 levels)
     - Smart color inheritance with two modes (variations/same)
-    - Small slice aggregation to reduce visual clutter
+    - Top-N aggregation: keep only top N items per level
+    - Percentage threshold aggregation (local or global mode)
+    - Flexible label formatting (name-only, name-count, name-percent, full)
+    - Adaptive font sizing based on segment geometry
     - Customizable line widths and label thresholds
     - Multiple output formats (PNG, SVG, PDF, EPS, TIFF)
     - Dual counting modes (all records or unique values)
@@ -166,13 +195,146 @@ def aggregate_small_slices(data_dict, threshold_percent, total_for_level, other_
         # Don't aggregate if only one small item or no small items
         return data_dict, []
 
+def aggregate_top_n(data_dict, top_n, other_label="Other"):
+    """
+    Keep only top N items by count, aggregate rest into "Other" category
+    
+    Args:
+        data_dict: Dictionary of items to potentially aggregate
+        top_n: Number of top items to keep (None or 0 = no limit)
+        other_label: Label to use for aggregated small items
+    
+    Returns:
+        Tuple of (aggregated_dict, other_items_list)
+    """
+    if not top_n or top_n <= 0:
+        return data_dict, []
+    
+    # Calculate totals for sorting
+    items_with_totals = []
+    for key, value in data_dict.items():
+        item_count = calculate_total_recursive(value) if not isinstance(value, int) else value
+        items_with_totals.append((key, value, item_count))
+    
+    # Sort by count descending
+    items_sorted = sorted(items_with_totals, key=lambda x: x[2], reverse=True)
+    
+    # Split into top N and rest
+    top_items = items_sorted[:top_n]
+    rest_items = items_sorted[top_n:]
+    
+    if not rest_items:
+        return data_dict, []
+    
+    # Build result
+    main_items = {key: value for key, value, _ in top_items}
+    other_total = sum(count for _, _, count in rest_items)
+    aggregated_keys = [key for key, _, _ in rest_items]
+    
+    if other_total > 0:
+        main_items[other_label] = other_total
+        print(f"    Kept top {top_n} items, aggregated {len(rest_items)} into '{other_label}' ({other_total:,} total)")
+    
+    return main_items, aggregated_keys
+
+
+def format_label(key, count, total_samples, level_total, label_style, show_percent):
+    """
+    Format segment label based on style settings
+    
+    Args:
+        key: Segment name
+        count: Segment count
+        total_samples: Global total for percentage calculation
+        level_total: Level total for local percentage
+        label_style: 'name-count' | 'name-only' | 'name-percent' | 'full'
+        show_percent: Whether to add percentage (can override style)
+    
+    Returns:
+        Formatted label string
+    """
+    global_pct = (count / total_samples * 100) if total_samples > 0 else 0
+    local_pct = (count / level_total * 100) if level_total > 0 else 0
+    
+    if label_style == 'name-only':
+        return key
+    elif label_style == 'name-percent':
+        return f"{key}\n{global_pct:.1f}%"
+    elif label_style == 'full':
+        return f"{key}\n{count:,} ({global_pct:.1f}%)"
+    elif label_style == 'name-count' or label_style is None:
+        # Default: name-count, optionally add percent
+        if show_percent:
+            return f"{key}\n{count:,} ({global_pct:.1f}%)"
+        else:
+            return f"{key}\n{count:,}"
+    else:
+        # Fallback
+        return f"{key}\n{count:,}"
+
+
+def calculate_adaptive_fontsize(angle_size, ring_width, level, base_min=5, base_max=12):
+    """
+    Calculate font size adaptively based on segment geometry
+    
+    Args:
+        angle_size: Angular size of segment in degrees
+        ring_width: Radial width of the ring
+        level: Hierarchy level (1-based)
+        base_min: Minimum font size
+        base_max: Maximum font size
+    
+    Returns:
+        Calculated font size
+    """
+    # Estimate arc length at mid-radius (normalized)
+    # Larger angles and wider rings = more space = larger font
+    
+    # Angular factor: scale from 0 (tiny) to 1 (full circle)
+    angle_factor = min(1.0, angle_size / 90.0)  # 90 degrees = max factor
+    
+    # Ring width factor: thinner rings need smaller text
+    ring_factor = min(1.0, ring_width / 0.25)  # 0.25 is a "normal" ring width
+    
+    # Level penalty: deeper levels get slightly smaller text
+    level_penalty = max(0, (level - 1) * 0.5)
+    
+    # Combined factor
+    combined = (angle_factor * 0.6 + ring_factor * 0.4)
+    
+    # Calculate size
+    fontsize = base_min + (base_max - base_min) * combined - level_penalty
+    
+    # Clamp to valid range
+    return max(base_min, min(base_max, fontsize))
+
+
 def generate_distinct_colors(n_colors):
     """Generate highly distinct colors for better discrimination"""
-    if n_colors <= 12:
-        # Use hand-picked distinct colors for small sets
+    if n_colors <= 20:
+        # Use hand-picked distinct colors for small/medium sets
+        # Order: blues first, then greens, teals, yellows, oranges, reds, purples, greys
         base_colors = [
-            '#BB8FCE', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7', '#DDA0DD',
-            '#98D8C8', '#FF6B6B', '#F7DC6F', '#85C1E9', '#F8C471', '#82E0AA'
+            '#2E86AB',  # 1 - dark blue
+            '#45B7D1',  # 2 - medium blue
+            '#85C1E9',  # 3 - light blue
+            '#27AE60',  # 4 - green
+            '#82E0AA',  # 5 - light green
+            '#4ECDC4',  # 6 - teal
+            '#96CEB4',  # 7 - sage
+            '#F4D03F',  # 8 - yellow
+            '#F7DC6F',  # 9 - light yellow
+            '#F8C471',  # 10 - orange
+            '#E74C3C',  # 11 - red
+            '#FF6B6B',  # 12 - coral
+            '#9B59B6',  # 13 - purple
+            '#BB8FCE',  # 14 - light purple
+            '#DDA0DD',  # 15 - plum
+            '#5D6D7E',  # 16 - slate grey
+            '#ABB2B9',  # 17 - light grey
+            '#1ABC9C',  # 18 - turquoise
+            '#E59866',  # 19 - tan
+            '#CD6155',  # 20 - dusty red
         ]
         return [base_colors[i % len(base_colors)] for i in range(n_colors)]
     else:
@@ -223,7 +385,8 @@ def create_sunburst_chart(hierarchy, total_samples, active_levels, output_file='
                          title='Data Sunburst Analysis', figsize=(18, 18), auto_formats=True,
                          color_inherit_level=1, color_mode='variations', count_unique=False,
                          line_width=0.5, threshold_percent=0.0, other_label="Other", 
-                         label_threshold=5.0):
+                         label_threshold=5.0, top_n=None, threshold_mode='local',
+                         label_style='name-count', show_percent=False, adaptive_font=True):
     """
     Create a sunburst chart with hierarchical segments for up to 5 levels
     
@@ -235,6 +398,11 @@ def create_sunburst_chart(hierarchy, total_samples, active_levels, output_file='
         color_inherit_level: Level from which colors should be inherited (1-based indexing)
         color_mode: 'variations' = create color variations for deeper levels
                    'same' = use exact same colors for all levels
+        top_n: Keep only top N items per level, aggregate rest (None = no limit)
+        threshold_mode: 'local' = percentage of level total, 'global' = percentage of grand total
+        label_style: 'name-count' | 'name-only' | 'name-percent' | 'full'
+        show_percent: Add percentage to labels (simpler toggle, works with name-count)
+        adaptive_font: Use adaptive font sizing based on segment geometry
     """    
     fig, ax = plt.subplots(figsize=figsize, subplot_kw=dict(aspect="equal"))
     
@@ -249,20 +417,37 @@ def create_sunburst_chart(hierarchy, total_samples, active_levels, output_file='
     print(f"Color inheritance level: {color_inherit_level}")
     print(f"Color mode: {color_mode}")
     print(f"Line width: {line_width}")
-    print(f"Small slice threshold: {threshold_percent}%")
+    print(f"Small slice threshold: {threshold_percent}% ({threshold_mode} mode)")
+    print(f"Top-N limit: {top_n if top_n else 'None (show all)'}")
     print(f"Label threshold: {label_threshold} degrees")
+    print(f"Label style: {label_style}, show_percent: {show_percent}")
+    print(f"Adaptive font sizing: {adaptive_font}")
     
     # Apply small slice aggregation to level 1 if threshold is set
     processed_hierarchy = dict(hierarchy)
     aggregation_info = {}  # Track what was aggregated
     
+    # First apply top-N if specified
+    if top_n and top_n > 0:
+        print(f"Applying top-{top_n} aggregation:")
+        processed_hierarchy, aggregated_items = aggregate_top_n(
+            processed_hierarchy, top_n, other_label
+        )
+        if aggregated_items:
+            aggregation_info['level_1_topn'] = aggregated_items
+    
+    # Then apply percentage threshold if specified
     if threshold_percent > 0:
-        print(f"Applying {threshold_percent}% threshold for small slice aggregation:")
-        level1_totals = {k: calculate_total_recursive(v) for k, v in hierarchy.items()}
-        total_for_level1 = sum(level1_totals.values())
+        print(f"Applying {threshold_percent}% threshold ({threshold_mode} mode) for small slice aggregation:")
+        level1_totals = {k: calculate_total_recursive(v) for k, v in processed_hierarchy.items()}
+        # Use global or local total based on mode
+        if threshold_mode == 'global':
+            total_for_threshold = total_samples
+        else:
+            total_for_threshold = sum(level1_totals.values())
         
         processed_hierarchy, aggregated_items = aggregate_small_slices(
-            hierarchy, threshold_percent, total_for_level1, other_label
+            processed_hierarchy, threshold_percent, total_for_threshold, other_label
         )
         
         if aggregated_items:
@@ -283,34 +468,57 @@ def create_sunburst_chart(hierarchy, total_samples, active_levels, output_file='
         if level >= n_levels:
             return
         
-        # Apply small slice aggregation if enabled and we're not at the top level or processing aggregated data
+        # Apply aggregation if enabled and we're not at the top level or processing aggregated data
         processed_data = data_dict
-        if threshold_percent > 0 and level > 0 and other_label not in str(path):
+        if level > 0 and other_label not in str(path):
             # Calculate total for this level
             if isinstance(list(data_dict.values())[0], int):
-                total_for_level = sum(data_dict.values())
+                level_total = sum(data_dict.values())
             else:
-                total_for_level = sum(calculate_total_recursive(v) for v in data_dict.values())
+                level_total = sum(calculate_total_recursive(v) for v in data_dict.values())
             
-            processed_data, aggregated_items = aggregate_small_slices(
-                data_dict, threshold_percent, total_for_level, other_label
-            )
+            # Apply top-N first if specified
+            if top_n and top_n > 0:
+                processed_data, aggregated_items = aggregate_top_n(
+                    processed_data, top_n, other_label
+                )
+                if aggregated_items:
+                    level_key = f"level_{level + 1}_topn"
+                    if level_key not in aggregation_info:
+                        aggregation_info[level_key] = []
+                    aggregation_info[level_key].extend([f"{'/'.join(path)}/{item}" for item in aggregated_items])
             
-            if aggregated_items:
-                level_key = f"level_{level + 1}"
-                if level_key not in aggregation_info:
-                    aggregation_info[level_key] = []
-                aggregation_info[level_key].extend([f"{'/'.join(path)}/{item}" for item in aggregated_items])
+            # Then apply percentage threshold if specified
+            if threshold_percent > 0:
+                # Use global or local total based on mode
+                if threshold_mode == 'global':
+                    total_for_threshold = total_samples
+                else:
+                    # Recalculate after top-N aggregation
+                    if isinstance(list(processed_data.values())[0], int):
+                        total_for_threshold = sum(processed_data.values())
+                    else:
+                        total_for_threshold = sum(calculate_total_recursive(v) for v in processed_data.values())
+                
+                processed_data, aggregated_items = aggregate_small_slices(
+                    processed_data, threshold_percent, total_for_threshold, other_label
+                )
+                
+                if aggregated_items:
+                    level_key = f"level_{level + 1}"
+                    if level_key not in aggregation_info:
+                        aggregation_info[level_key] = []
+                    aggregation_info[level_key].extend([f"{'/'.join(path)}/{item}" for item in aggregated_items])
         
         # Sort items by size
         if isinstance(list(processed_data.values())[0], int):
             # Final level - values are integers
             items_sorted = sorted(processed_data.items(), key=lambda x: x[1], reverse=True)
-            total_for_level = sum(processed_data.values())
+            level_total = sum(processed_data.values())
         else:
             # Intermediate level - values are dictionaries
             items_sorted = sorted(processed_data.items(), key=lambda x: calculate_total_recursive(x[1]), reverse=True)
-            total_for_level = sum(calculate_total_recursive(v) for v in processed_data.values())
+            level_total = sum(calculate_total_recursive(v) for v in processed_data.values())
         
         current_angle = parent_angle_start
         
@@ -334,6 +542,9 @@ def create_sunburst_chart(hierarchy, total_samples, active_levels, output_file='
                 # Generate variations of the parent color
                 level_colors = generate_color_variations(parent_color, len(items_sorted))
         
+        # Calculate ring width for this level (for adaptive font sizing)
+        current_ring_width = radii[level + 1] - radii[level]
+        
         for i, (key, value) in enumerate(items_sorted):
             if isinstance(value, int):
                 item_total = value
@@ -341,10 +552,14 @@ def create_sunburst_chart(hierarchy, total_samples, active_levels, output_file='
                 item_total = calculate_total_recursive(value)
                 
             # Calculate angle for this segment
-            angle_size = (item_total / total_for_level) * parent_angle_size
+            angle_size = (item_total / level_total) * parent_angle_size
             
             # Use assigned color
             segment_color = level_colors[i]
+            
+            # Format label according to style settings
+            formatted_label = format_label(key, item_total, total_samples, level_total, 
+                                          label_style, show_percent)
             
             segments.append({
                 'level': level + 1,
@@ -353,10 +568,12 @@ def create_sunburst_chart(hierarchy, total_samples, active_levels, output_file='
                 'inner_radius': radii[level],
                 'outer_radius': radii[level + 1],
                 'color': segment_color,
-                'label': f"{key}\n{item_total:,}",
+                'label': formatted_label,
                 'key': key,
                 'value': item_total,
-                'path': path + [key]
+                'path': path + [key],
+                'ring_width': current_ring_width,
+                'level_total': level_total
             })
             
             # Recursively process next level if it exists
@@ -401,12 +618,17 @@ def create_sunburst_chart(hierarchy, total_samples, active_levels, output_file='
             if mid_angle > 90 and mid_angle <= 270:
                 rotation = mid_angle + 180  # Flip text in bottom half
             
-            # Font size based on level and segment size
-            base_fontsize = max(6, min(12, 14 - segment['level']))
-            if angle_size < 10:
-                fontsize = max(6, base_fontsize - 2)
+            # Font size calculation - adaptive or legacy
+            if adaptive_font:
+                ring_width = segment.get('ring_width', radii[1] - radii[0])
+                fontsize = calculate_adaptive_fontsize(angle_size, ring_width, segment['level'])
             else:
-                fontsize = base_fontsize
+                # Legacy font size calculation
+                base_fontsize = max(6, min(12, 14 - segment['level']))
+                if angle_size < 10:
+                    fontsize = max(6, base_fontsize - 2)
+                else:
+                    fontsize = base_fontsize
                 
             fontweight = 'bold' if segment['level'] <= 2 else 'normal'
             
@@ -487,6 +709,10 @@ def create_sunburst_chart(hierarchy, total_samples, active_levels, output_file='
     print(f"Color mode: {color_mode}")
     print(f"Line width: {line_width}")
     print(f"Label threshold: {label_threshold} degrees")
+    print(f"Label style: {label_style}")
+    print(f"Top-N: {top_n if top_n else 'disabled'}")
+    print(f"Threshold mode: {threshold_mode}")
+    print(f"Adaptive font: {adaptive_font}")
     
     # Report aggregation results
     if aggregation_info:
@@ -545,6 +771,20 @@ def main():
     parser.add_argument('--label-threshold', type=float, default=5.0,
                        help='Minimum angle in degrees for showing segment labels (default: 5.0)')
     
+    # NEW: Top-N, threshold-mode, label-style, show-percent, adaptive-font
+    parser.add_argument('--top-n', type=int, default=None,
+                       help='Keep only top N items per level, aggregate rest into "Other" (default: None = show all)')
+    parser.add_argument('--threshold-mode', choices=['local', 'global'], default='local',
+                       help='Threshold calculation mode: "local" = percentage of level total, '
+                            '"global" = percentage of grand total (default: local)')
+    parser.add_argument('--label-style', choices=['name-count', 'name-only', 'name-percent', 'full'], 
+                       default='name-count',
+                       help='Label format style: "name-count" (default), "name-only", "name-percent", "full" (name + count + percent)')
+    parser.add_argument('--show-percent', action='store_true',
+                       help='Add percentage to labels (works with name-count style)')
+    parser.add_argument('--no-adaptive-font', action='store_true',
+                       help='Disable adaptive font sizing (use legacy fixed sizing)')
+    
     args = parser.parse_args()
     
     # Validate threshold
@@ -578,7 +818,12 @@ def main():
         line_width=args.line_width,
         threshold_percent=args.threshold,
         other_label=args.other_label,
-        label_threshold=args.label_threshold
+        label_threshold=args.label_threshold,
+        top_n=args.top_n,
+        threshold_mode=args.threshold_mode,
+        label_style=args.label_style,
+        show_percent=args.show_percent,
+        adaptive_font=not args.no_adaptive_font
     )
 
 if __name__ == "__main__":
@@ -587,21 +832,30 @@ if __name__ == "__main__":
         print("Enhanced Sunburst Chart Generator")
         print("=================================")
         print("\nBasic usage:")
-        print("python enhanced_sunburst_chart_script.py bge_museum_data.csv")
-        print("\nNew features:")
-        print("python enhanced_sunburst_chart_script.py data.csv --line-width 0.2    # Thinner lines")
-        print("python enhanced_sunburst_chart_script.py data.csv --threshold 5.0     # Group items < 5% into 'Other'")
-        print("python enhanced_sunburst_chart_script.py data.csv --label-threshold 3.0  # Only show labels for segments > 3 degrees")
-        print("python enhanced_sunburst_chart_script.py data.csv --threshold 10 --other-label 'Miscellaneous'")
-        print("\nCombined usage:")
-        print("python enhanced_sunburst_chart_script.py data.csv --line-width 0.3 --threshold 8.0")
+        print("  python sunburst_script.py bge_museum_data.csv")
+        print("\nGrouping options:")
+        print("  python sunburst_script.py data.csv --top-n 8              # Keep top 8, group rest")
+        print("  python sunburst_script.py data.csv --threshold 5.0        # Group items < 5%")
+        print("  python sunburst_script.py data.csv --threshold-mode global  # Use global totals")
+        print("  python sunburst_script.py data.csv --top-n 10 --threshold 2  # Combined")
+        print("\nLabel formatting:")
+        print("  python sunburst_script.py data.csv --label-style name-only     # Names only")
+        print("  python sunburst_script.py data.csv --label-style name-percent  # Names + %")
+        print("  python sunburst_script.py data.csv --label-style full          # Name + count + %")
+        print("  python sunburst_script.py data.csv --show-percent              # Add % to default")
+        print("\nVisual options:")
+        print("  python sunburst_script.py data.csv --line-width 0.2           # Thinner lines")
+        print("  python sunburst_script.py data.csv --label-threshold 3.0      # More labels visible")
+        print("  python sunburst_script.py data.csv --no-adaptive-font         # Legacy font sizing")
+        print("\nCombined example:")
+        print("  python sunburst_script.py data.csv --top-n 10 --label-style full --line-width 0.3")
         print("\nAll original features still supported:")
-        print("python enhanced_sunburst_chart_script.py data.csv --output chart.svg")
-        print("python enhanced_sunburst_chart_script.py data.csv --level4 Category4 --level5 Category5")
-        print("python enhanced_sunburst_chart_script.py data.csv --color-inherit-level 2")
-        print("python enhanced_sunburst_chart_script.py data.csv --count-unique")
+        print("  python sunburst_script.py data.csv --output chart.svg")
+        print("  python sunburst_script.py data.csv --level4 Category4 --level5 Category5")
+        print("  python sunburst_script.py data.csv --color-inherit-level 2")
+        print("  python sunburst_script.py data.csv --count-unique")
         print("\nSupported formats: PNG, JPG, PDF, SVG, EPS, TIFF")
         print("Note: SVG and PDF versions are automatically created for editing")
-        print("\nFor help: python enhanced_sunburst_chart_script.py --help")
+        print("\nFor help: python sunburst_script.py --help")
     else:
         main()
