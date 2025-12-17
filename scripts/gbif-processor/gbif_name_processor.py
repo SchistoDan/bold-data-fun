@@ -5,6 +5,10 @@ GBIF Name Processor
 Processes GBIF species match output files against a rules matrix to determine
 whether to use original names or GBIF-matched names for ENA taxonomy submissions.
 
+This script is part of the BGE (Biodiversity Genomics Europe) taxonomic validation
+workflow. It takes the output from a GBIF backbone species match and applies a
+decision matrix to determine the appropriate taxonomic name to use for each specimen.
+
 Workflow Context:
     1. Specimen names are matched against the GBIF backbone taxonomy
     2. This script applies rules based on match status, match type, and name similarity
@@ -46,8 +50,9 @@ Examples:
     python gbif_name_processor.py -i gbif_results.csv -r gbif_rules.csv
 
     # Specify output directory and custom project ID
-    python gbif_name_processor.py -i gbif_results.csv -r gbif_rules.csv -o ./output -p UKBOL
+    python gbif_name_processor.py -i gbif_results.csv -r gbif_rules.csv -o ./output -p ERGA
 
+Author: Dan Parsons, Natural History Museum London
 """
 
 import argparse
@@ -98,10 +103,23 @@ def extract_genus(binomial: str) -> str:
 
 
 def is_type_specimen(type_status: str) -> bool:
-    """Check if 'type' is present in the type_status column (case-insensitive)."""
+    """
+    Check if the type_status indicates a type specimen.
+    
+    Returns True for values like: 'type', 'holotype', 'paratype', 'syntype', 'lectotype'
+    Returns False for: empty values, 'no type', 'not type', or values not containing 'type'
+    """
     if not type_status:
         return False
-    return 'type' in type_status.lower()
+    
+    status_lower = type_status.lower().strip()
+    
+    # Explicitly exclude negated type statuses
+    if status_lower in ('no type', 'not type', 'notype', 'nottype'):
+        return False
+    
+    # Check for 'type' as a standalone word or as part of a compound (e.g., holotype)
+    return 'type' in status_lower
 
 
 def compare_names(original: str, gbif: str) -> str:
