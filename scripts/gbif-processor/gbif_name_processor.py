@@ -42,6 +42,9 @@ Output Files:
        Additional columns: name_to_use, description_text, check_ENA_with_GBIF,
        manual_verification_needed
 
+    4. {basename}_manually_verify.csv
+       Rows flagged for manual verification, containing all original input columns.
+
 Usage:
     python gbif_name_processor.py -i INPUT_FILE -r RULES_FILE [-o OUTPUT_DIR] [-p PROJECT_ID]
 
@@ -199,6 +202,7 @@ def process_file(input_file: str, rules_file: str, output_dir: str = None, proje
     1. {basename}_request_taxid.tsv - For 'original' names (proposed_name, name_type, host, project_id, description)
     2. {basename}_check_ENA.csv - For 'GBIF' names (ID, scientificName, genus, family, order, class, phylum)
     3. {basename}_annotated.csv - Copy of input with additional columns
+    4. {basename}_manually_verify.csv - Rows needing manual verification (all input columns)
     """
     # Set up paths
     input_path = Path(input_file)
@@ -216,11 +220,13 @@ def process_file(input_file: str, rules_file: str, output_dir: str = None, proje
     request_taxid_file = out_path / f"{basename}_request_taxid.tsv"
     check_ena_file = out_path / f"{basename}_check_ENA.csv"
     annotated_file = out_path / f"{basename}_annotated.csv"
+    manually_verify_file = out_path / f"{basename}_manually_verify.csv"
     
     # Read input and process
     original_rows = []  # For request_taxid.tsv
     gbif_rows = []      # For check_ENA.csv
     annotated_rows = [] # For annotated.csv
+    manually_verify_rows = []  # For manually_verify.csv
     
     with open(input_file, 'r', encoding='utf-8') as f:
         reader = csv.DictReader(f)
@@ -257,6 +263,10 @@ def process_file(input_file: str, rules_file: str, output_dir: str = None, proje
                     'class': result['gbif_class'],
                     'phylum': result['gbif_phylum']
                 })
+            
+            # Collect rows needing manual verification
+            if result['manual_verification'] == 'yes':
+                manually_verify_rows.append(row.copy())
     
     # Write request_taxid.tsv
     with open(request_taxid_file, 'w', encoding='utf-8', newline='') as f:
@@ -280,6 +290,13 @@ def process_file(input_file: str, rules_file: str, output_dir: str = None, proje
         writer.writerows(annotated_rows)
     print(f"Created: {annotated_file} ({len(annotated_rows)} rows)")
     
+    # Write manually_verify.csv
+    with open(manually_verify_file, 'w', encoding='utf-8', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(manually_verify_rows)
+    print(f"Created: {manually_verify_file} ({len(manually_verify_rows)} rows)")
+    
     # Print summary
     not_possible = sum(1 for r in annotated_rows if r['name_to_use'] == 'not a possible combination')
     unknown = sum(1 for r in annotated_rows if r['name_to_use'] == 'unknown')
@@ -287,6 +304,7 @@ def process_file(input_file: str, rules_file: str, output_dir: str = None, proje
     print(f"\nSummary:")
     print(f"  Original: {len(original_rows)}")
     print(f"  GBIF: {len(gbif_rows)}")
+    print(f"  Manual verification: {len(manually_verify_rows)}")
     print(f"  Not possible: {not_possible}")
     print(f"  Unknown (no matching rule): {unknown}")
 
@@ -300,6 +318,7 @@ Outputs:
   {input_basename}_request_taxid.tsv  - Names to use as original (with GBIF hyperlinks)
   {input_basename}_check_ENA.csv      - Names to check in ENA with GBIF name
   {input_basename}_annotated.csv      - Full input with decision columns added
+  {input_basename}_manually_verify.csv - Rows needing manual verification
 
 Example:
   python gbif_name_processor.py -i XE-4013_output.csv -r gbif_rules.csv -p BGE
