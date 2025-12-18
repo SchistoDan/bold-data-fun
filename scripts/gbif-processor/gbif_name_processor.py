@@ -5,10 +5,6 @@ GBIF Name Processor
 Processes GBIF species match output files against a rules matrix to determine
 whether to use original names or GBIF-matched names for ENA taxonomy submissions.
 
-This script is part of the BGE (Biodiversity Genomics Europe) taxonomic validation
-workflow. It takes the output from a GBIF backbone species match and applies a
-decision matrix to determine the appropriate taxonomic name to use for each specimen.
-
 Workflow Context:
     1. Specimen names are matched against the GBIF backbone taxonomy
     2. This script applies rules based on match status, match type, and name similarity
@@ -16,9 +12,13 @@ Workflow Context:
 
 Input Requirements:
     - Input CSV must contain columns: ID, scientificName, type_status, gbif_status,
-      gbif_matchType, gbif_species, gbif_genus, gbif_speciesKey
-    - Rules CSV must contain columns: status, matchType, 'GBIF species value',
-      'GBIF genus value', 'Type specimen', 'name to use'
+      gbif_matchType, gbif_species, gbif_genus, gbif_family, gbif_order, gbif_class,
+      gbif_phylum, gbif_speciesKey
+    - Rules CSV must contain columns:
+        Required: status, matchType, 'GBIF species value', 'GBIF genus value',
+                  'Type specimen', 'name to use'
+        Optional: 'text to add to \'description\' column of taxononmy_request.tsv',
+                  'check ENA with GBIF name?', 'manual verification needed'
 
 Decision Logic:
     The script compares the original scientific name against GBIF's matched name:
@@ -35,7 +35,7 @@ Output Files:
 
     2. {basename}_check_ENA.csv
        Names where the GBIF name should be used, requiring ENA validation.
-       Columns: ID, ScientificName
+       Columns: ID, scientificName, genus, family, order, class, phylum
 
     3. {basename}_annotated.csv
        Complete input data with decision columns appended for review.
@@ -50,9 +50,8 @@ Examples:
     python gbif_name_processor.py -i gbif_results.csv -r gbif_rules.csv
 
     # Specify output directory and custom project ID
-    python gbif_name_processor.py -i gbif_results.csv -r gbif_rules.csv -o ./output -p ERGA
+    python gbif_name_processor.py -i gbif_results.csv -r gbif_rules.csv -o ./output -p UKBOL
 
-Author: Dan Parsons, Natural History Museum London
 """
 
 import argparse
@@ -103,23 +102,10 @@ def extract_genus(binomial: str) -> str:
 
 
 def is_type_specimen(type_status: str) -> bool:
-    """
-    Check if the type_status indicates a type specimen.
-    
-    Returns True for values like: 'type', 'holotype', 'paratype', 'syntype', 'lectotype'
-    Returns False for: empty values, 'no type', 'not type', or values not containing 'type'
-    """
+    """Check if 'type' is present in the type_status column (case-insensitive)."""
     if not type_status:
         return False
-    
-    status_lower = type_status.lower().strip()
-    
-    # Explicitly exclude negated type statuses
-    if status_lower in ('no type', 'not type', 'notype', 'nottype'):
-        return False
-    
-    # Check for 'type' as a standalone word or as part of a compound (e.g., holotype)
-    return 'type' in status_lower
+    return 'type' in type_status.lower()
 
 
 def compare_names(original: str, gbif: str) -> str:
@@ -145,6 +131,7 @@ def process_row(row: dict, rules: dict) -> dict:
     verbatim_name = row.get('scientificName', '').strip()
     gbif_species = row.get('gbif_species', '').strip()
     gbif_genus = row.get('gbif_genus', '').strip()
+    gbif_family = row.get('gbif_family', '').strip()
     gbif_key = row.get('gbif_speciesKey', '').strip()
     sample_id = row.get('ID', '').strip()
     
@@ -190,6 +177,11 @@ def process_row(row: dict, rules: dict) -> dict:
         'gbif_key': gbif_key,
         'verbatim_name': verbatim_name,
         'gbif_species': gbif_species,
+        'gbif_genus': gbif_genus,
+        'gbif_family': gbif_family,
+        'gbif_order': row.get('gbif_order', '').strip(),
+        'gbif_class': row.get('gbif_class', '').strip(),
+        'gbif_phylum': row.get('gbif_phylum', '').strip(),
         'species_match': species_match,
         'genus_match': genus_match,
         'is_type': is_type,
@@ -205,7 +197,7 @@ def process_file(input_file: str, rules_file: str, output_dir: str = None, proje
     
     Outputs:
     1. {basename}_request_taxid.tsv - For 'original' names (proposed_name, name_type, host, project_id, description)
-    2. {basename}_check_ENA.csv - For 'GBIF' names (ID, ScientificName)
+    2. {basename}_check_ENA.csv - For 'GBIF' names (ID, scientificName, genus, family, order, class, phylum)
     3. {basename}_annotated.csv - Copy of input with additional columns
     """
     # Set up paths
@@ -258,7 +250,12 @@ def process_file(input_file: str, rules_file: str, output_dir: str = None, proje
             elif result['name_to_use'] == 'gbif':
                 gbif_rows.append({
                     'ID': result['sample_id'],
-                    'ScientificName': result['gbif_species']
+                    'scientificName': result['gbif_species'],
+                    'genus': result['gbif_genus'],
+                    'family': result['gbif_family'],
+                    'order': result['gbif_order'],
+                    'class': result['gbif_class'],
+                    'phylum': result['gbif_phylum']
                 })
     
     # Write request_taxid.tsv
@@ -270,7 +267,7 @@ def process_file(input_file: str, rules_file: str, output_dir: str = None, proje
     
     # Write check_ENA.csv
     with open(check_ena_file, 'w', encoding='utf-8', newline='') as f:
-        writer = csv.DictWriter(f, fieldnames=['ID', 'ScientificName'])
+        writer = csv.DictWriter(f, fieldnames=['ID', 'scientificName', 'genus', 'family', 'order', 'class', 'phylum'])
         writer.writeheader()
         writer.writerows(gbif_rows)
     print(f"Created: {check_ena_file} ({len(gbif_rows)} rows)")
